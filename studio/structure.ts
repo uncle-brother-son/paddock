@@ -7,6 +7,7 @@ import {
   Gift,
   IdCard,
   Info,
+  LayoutList,
   ListFilter,
   Menu,
   Newspaper,
@@ -48,14 +49,49 @@ export const structure: StructureResolver = (S) =>
         .title('Session Types')
         .icon(VerticalWaves)
         .child(S.documentTypeList('serviceType').title('Session Types')),
+      // W81 (WQ84): the cards the site shows (website only) beside the plans and the passes they group.
       S.listItem()
-        .title('Membership Plans')
+        .title('Memberships')
         .icon(IdCard)
-        .child(S.documentTypeList('membershipPlan').title('Membership Plans')),
+        .child(
+          S.list()
+            .title('Memberships')
+            .items([
+              S.listItem()
+                .title('Membership Cards')
+                .icon(LayoutList)
+                .child(
+                  S.documentTypeList('membershipCard')
+                    .title('Membership Cards')
+                    .defaultOrdering([{field: 'order', direction: 'asc'}]),
+                ),
+              S.listItem()
+                .title('Membership Plans')
+                .icon(IdCard)
+                .child(S.documentTypeList('membershipPlan').title('Membership Plans')),
+            ]),
+        ),
       S.listItem()
         .title('Session Passes')
         .icon(Ticket)
-        .child(S.documentTypeList('sessionPassType').title('Session Passes')),
+        .child(
+          S.list()
+            .title('Session Passes')
+            .items([
+              S.listItem()
+                .title('Session Pass Cards')
+                .icon(LayoutList)
+                .child(
+                  S.documentTypeList('sessionPassCard')
+                    .title('Session Pass Cards')
+                    .defaultOrdering([{field: 'order', direction: 'asc'}]),
+                ),
+              S.listItem()
+                .title('Session Pass Types')
+                .icon(Ticket)
+                .child(S.documentTypeList('sessionPassType').title('Session Pass Types')),
+            ]),
+        ),
       S.listItem()
         .title('Add-ons')
         .icon(CupSoda)

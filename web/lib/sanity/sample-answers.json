@@ -914,6 +914,53 @@
         "theme": "fjord",
         "sectionId": "whats-on",
         "heading": "More"
+      },
+      {
+        "type": "memberships",
+        "key": "mb1",
+        "theme": "dark",
+        "sectionId": null,
+        "heading": "Memberships",
+        "note": [
+          {
+            "_type": "block",
+            "_key": "n1",
+            "style": "normal",
+            "listItem": null,
+            "level": null,
+            "children": [
+              {
+                "_type": "span",
+                "_key": "n1s",
+                "text": "Monthly memberships have a 2 month minimum.",
+                "marks": []
+              }
+            ],
+            "markDefs": []
+          }
+        ]
+      },
+      {
+        "type": "memberships",
+        "key": "mb2",
+        "theme": null,
+        "sectionId": null,
+        "heading": null,
+        "note": []
+      },
+      {
+        "type": "sessionPasses",
+        "key": "sp1",
+        "theme": null,
+        "sectionId": "session-passes",
+        "heading": "Session Passes"
+      },
+      {
+        "type": "sessionPasses",
+        "key": "sp2",
+        "theme": null,
+        "sectionId": null,
+        "heading": null
       }
     ],
     "seo": {
@@ -1911,6 +1958,78 @@
     {
       "id": "addon-tea",
       "picture": null
+    }
+  ],
+  "membershipCards": [
+    {
+      "id": "card-champion",
+      "name": "Champion",
+      "line": null,
+      "corePlan": "plan-champion-core",
+      "allAccessPlan": null,
+      "benefits": [],
+      "herdBenefits": []
+    },
+    {
+      "id": "card-foal",
+      "name": "Foal",
+      "line": "4 Sessions a month",
+      "corePlan": "plan-foal-core",
+      "allAccessPlan": "plan-foal-all",
+      "benefits": [
+        {
+          "key": "b1",
+          "text": "4 Sessions a month",
+          "showFor": "both"
+        },
+        {
+          "key": "b2",
+          "text": "Herd benefits after 6 months",
+          "showFor": "monthly"
+        },
+        {
+          "key": "b3",
+          "text": "Immediate Herd benefits",
+          "showFor": "yearly"
+        },
+        {
+          "key": "b5",
+          "text": "Personalised sauna hat",
+          "showFor": "both"
+        }
+      ],
+      "herdBenefits": [
+        {
+          "key": "h1",
+          "text": "1 free smoothie per month",
+          "showFor": "both"
+        }
+      ]
+    },
+    {
+      "id": "card-yearling",
+      "name": "Yearling",
+      "line": null,
+      "corePlan": null,
+      "allAccessPlan": null,
+      "benefits": [],
+      "herdBenefits": []
+    }
+  ],
+  "sessionPassCards": [
+    {
+      "id": "card-5",
+      "name": "5 Session",
+      "line": "Session Pass",
+      "corePass": "pass-5-core",
+      "allAccessPass": "pass-5-all"
+    },
+    {
+      "id": "card-10",
+      "name": "10 Session",
+      "line": null,
+      "corePass": null,
+      "allAccessPass": null
     }
   ]
 }

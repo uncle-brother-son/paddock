@@ -241,6 +241,9 @@ describe('W73b: HeroMedia is a module of a page', () => {
       'textBlock',
       'textMediaSticky',
       'accordionList',
+      // W81
+      'memberships',
+      'sessionPasses',
       'upcomingEvents',
       'sectionSpacer',
     ])

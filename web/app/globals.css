@@ -184,6 +184,14 @@
   --gallery-upright-columns: 5;
   --gallery-wide-columns: 6;
   --gallery-gap-columns: 0;
+
+  /*
+   * W81: the cards of the Memberships and SessionPasses modules (Figma 1842:46324, 1842:48611; the `plan-strip`
+   * utility below). The Mobile frame's here: a card is 5 of the grid's 6 columns and the cards do not share the row
+   * (0). From 768px, the Desktop frame's: they share it (1).
+   */
+  --plan-card-columns: 5;
+  --plan-cards-share: 0;
 }
 
 @media (width >= 48rem) {
@@ -198,6 +206,8 @@
     --gallery-upright-columns: 7;
     --gallery-wide-columns: 9;
     --gallery-gap-columns: 1;
+
+    --plan-cards-share: 1;
   }
 }
 
@@ -830,6 +840,56 @@ body {
   flex: none;
   width: var(--gallery-span);
   aspect-ratio: var(--gallery-shape);
+}
+
+/*
+ * The row of cards in the Memberships and SessionPasses modules (W81; Figma "Memberships", 1842:46324, and
+ * "SessionPasses", 1842:48611). components/modules/content/PlanCardRow.tsx puts `plan-strip` on the strip that can
+ * scroll sideways, `plan-row` on the row inside it and `plan-card` on each card, with how many cards share the row as
+ * --plan-cards (the number Figma draws, or more when there are more) and how many empty grid columns stand each side of the row from 768px as --plan-inset-columns (Figma's
+ * empty Column frames: 1 for the memberships, 4 for the passes). The module's section is a size container, as the
+ * GalleryCarousel's is, so 100cqw is the section's width and a column here is a column of the page grid.
+ *   - Below 768px (Figma's Carousel): a card is 5 of the grid's 6 columns, the row starts at the grid's margin with
+ *     8px (the gutter) between two cards, and the cards after the first are reached by swiping sideways.
+ *   - From 768px: the cards share the columns between the empty ones equally, as Figma's fill does (three in 22
+ *     columns, two in 16). No card is narrower than Figma's narrowest (--plan-card-least: its phone card, 297px), so
+ *     where they can't all be that wide (a tablet, between the two frames Figma draws) the row scrolls sideways as it
+ *     does on a phone; with fewer cards than Figma draws each keeps its drawn width and the row is centred.
+ *   - The row is as wide as its cards and the grid's margin each side, and stands in the middle of the strip: with
+ *     the cards sharing the columns that is the empty columns each side; a row too wide for the window starts at the
+ *     margin, as on a phone.
+ * Which of the two a width of screen gets (--plan-cards-share) and the phone card's columns (--plan-card-columns) are
+ * set with the grid, in `:root` above. The strip shows no scrollbar.
+ */
+@utility plan-strip {
+  --plan-card-least: 297px;
+  --plan-column: calc((100cqw - 2 * var(--grid-margin) - (var(--grid-columns) - 1) * var(--grid-gutter)) / var(--grid-columns));
+  --plan-inset: calc(var(--plan-cards-share) * var(--plan-inset-columns, 0) * (var(--plan-column) + var(--grid-gutter)));
+  --plan-card-alone: calc(var(--plan-card-columns) * var(--plan-column) + (var(--plan-card-columns) - 1) * var(--grid-gutter));
+  --plan-card-shared: max(
+    var(--plan-card-least),
+    calc((100cqw - 2 * var(--grid-margin) - 2 * var(--plan-inset) - (var(--plan-cards, 1) - 1) * var(--grid-gutter)) / var(--plan-cards, 1))
+  );
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility plan-row {
+  display: flex;
+  column-gap: var(--grid-gutter);
+  width: max-content;
+  margin-inline: auto;
+  padding-inline: var(--grid-margin);
+}
+
+@utility plan-card {
+  flex: none;
+  width: calc(var(--plan-cards-share) * var(--plan-card-shared) + (1 - var(--plan-cards-share)) * var(--plan-card-alone));
 }
 
 /*

@@ -63,6 +63,11 @@ describe("Sanity's answer for a page", () => {
       ['e2', 'sectionSpacer'],
       ['h8', 'heroMedia'],
       ['m3', 'upcomingEvents'],
+      // W81: the Memberships and Session Passes modules (lib/memberships/cards.test.ts).
+      ['mb1', 'memberships'],
+      ['mb2', 'memberships'],
+      ['sp1', 'sessionPasses'],
+      ['sp2', 'sessionPasses'],
     ])
     expect(JSON.stringify(answers.contentPage)).not.toContain('somethingNew')
   })

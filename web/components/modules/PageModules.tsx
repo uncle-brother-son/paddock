@@ -15,8 +15,8 @@ import {
   type TextMediaStickyContent,
 } from '@/lib/modules/content'
 import { heroMediaContent, type HeroMediaContent } from '@/lib/modules/hero-media'
-import { themeOf, type SectionSettings } from '@/lib/modules/section'
-import type { PageModule } from '@/lib/sanity/schemas'
+import { DEFAULT_SECTION_IDS, formThemeOf, themeOf, type SectionSettings } from '@/lib/modules/section'
+import type { PageModule, RichText } from '@/lib/sanity/schemas'
 
 import { AccordionList } from './content/AccordionList'
 import { GalleryCarousel } from './content/GalleryCarousel'
@@ -25,6 +25,7 @@ import { PageHeader } from './content/PageHeader'
 import { SectionSpacer } from './content/SectionSpacer'
 import { TextBlock } from './content/TextBlock'
 import { TextMediaSticky } from './content/TextMediaSticky'
+import { MembershipsModule, SessionPassesModule } from './MembershipsModule'
 import { PageTheme } from './PageTheme'
 import { UpcomingEventsModule } from './UpcomingEventsModule'
 
@@ -38,6 +39,8 @@ type Shown = { key: string } & (
   | { kind: 'sticky'; content: TextMediaStickyContent }
   | { kind: 'text'; content: TextBlockContent }
   | { kind: 'spacer'; section: SectionSettings }
+  | { kind: 'memberships'; heading: string | null; note: RichText; section: SectionSettings }
+  | { kind: 'passes'; heading: string | null; section: SectionSettings }
 )
 
 /** What a module is on the page, or nothing: a module with nothing to show yet takes no room. */
@@ -72,6 +75,11 @@ function shownOf(module: PageModule): Shown[] {
     }
     case 'sectionSpacer':
       return [{ key, kind: 'spacer', section: sectionSettings(module) }]
+    case 'memberships':
+      // Their cards are forms: Light or Dark only (docs/build-standards.md: Fjord and Mud are never used for forms).
+      return [{ key, kind: 'memberships', heading: module.heading, note: module.note, section: { ...sectionSettings(module), theme: formThemeOf(module.theme) } }]
+    case 'sessionPasses':
+      return [{ key, kind: 'passes', heading: module.heading, section: { ...sectionSettings(module), theme: formThemeOf(module.theme) } }]
   }
 }
 
@@ -80,13 +88,15 @@ const pageThemeOf = (one: Shown) => (one.kind === 'hero' ? null : themeOf('conte
 
 /**
  * A page's modules, top to bottom, as an editor ordered them in Sanity (W73b). Each kind of module has its own
- * component here: HeroMedia, the Upcoming Events list (W75), and W80's content modules (PageHeader, GalleryCarousel,
- * AccordionList, TextMediaSticky, TextBlock, SectionSpacer). A module with nothing to show yet takes no room: a
- * HeroMedia with no picture or video, an events list with no upcoming event, a text module with no words.
+ * component here: HeroMedia, the Upcoming Events list (W75), W80's content modules (PageHeader, GalleryCarousel,
+ * AccordionList, TextMediaSticky, TextBlock, SectionSpacer) and W81's Memberships and SessionPasses. A module with
+ * nothing to show yet takes no room: a HeroMedia with no picture or video, an events list with no upcoming event, a
+ * text module with no words, a Memberships or SessionPasses module with no card on sale.
  *
  * Every module's section has its Section ID as its id, when an editor gave it one (WQ83). The page's first events
  * list with none of its own carries the id `events`, which is where an Event page's "All Events" scrolls to (WQ60:
- * /exclusive-hire#events).
+ * /exclusive-hire#events). W81: in the same way the page's first Memberships module is `memberships` and its first
+ * SessionPasses module `passes` (`DEFAULT_SECTION_IDS`), which is where PageHeader's two buttons go.
  *
  * `heading` is the page's one h1. The page's first PageHeader with a title draws it: that title is the h1 (a later
  * PageHeader's is an h2). On a page with none it is there for screen readers and search engines only, and changes
@@ -99,6 +109,8 @@ const pageThemeOf = (one: Shown) => (one.kind === 'hero' ? null : themeOf('conte
 export function PageModules({ modules, heading }: { modules: PageModule[]; heading: string }) {
   const shown = modules.flatMap(shownOf)
   const firstEvents = shown.findIndex((one) => one.kind === 'events')
+  const firstMemberships = shown.findIndex((one) => one.kind === 'memberships')
+  const firstPasses = shown.findIndex((one) => one.kind === 'passes')
   const titled = shown.findIndex((one) => one.kind === 'pageHeader' && one.content.title !== null)
   const h1 = titled < 0 ? <h1 className="sr-only">{heading}</h1> : null
   const startsWithHero = shown[0]?.kind === 'hero'
@@ -125,6 +137,18 @@ export function PageModules({ modules, heading }: { modules: PageModule[]; headi
         return <TextBlock key={one.key} {...one.content} />
       case 'spacer':
         return <SectionSpacer key={one.key} {...one.section} />
+      case 'memberships':
+        return (
+          <MembershipsModule
+            key={one.key}
+            heading={one.heading}
+            note={one.note}
+            theme={one.section.theme}
+            sectionId={one.section.sectionId ?? (index === firstMemberships ? DEFAULT_SECTION_IDS.memberships : null)}
+          />
+        )
+      case 'passes':
+        return <SessionPassesModule key={one.key} heading={one.heading} theme={one.section.theme} sectionId={one.section.sectionId ?? (index === firstPasses ? DEFAULT_SECTION_IDS.sessionPasses : null)} />
     }
   }
   return (

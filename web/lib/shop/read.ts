@@ -6,6 +6,7 @@ import { cache } from 'react'
 
 import { readShopAddons, type ShopAddon } from '@/server/rules/shop/booking'
 import { readShopEvent, readShopEvents, type ShopEvent } from '@/server/rules/shop/events'
+import { readShopMemberships, type ShopMemberships } from '@/server/rules/shop/memberships'
 import { readShop, readShopGiftCard, type Shop, type ShopGiftCardPage } from '@/server/rules/shop/reads'
 
 // W74: the one file of the website that reads the shop from the Worker's rules (W74a: `readShop()`, no HTTP). Every
@@ -15,9 +16,12 @@ import { readShop, readShopGiftCard, type Shop, type ShopGiftCardPage } from '@/
 // W76: the gift card's read (W76a: `readShopGiftCard()`): its amounts on sale, the Other limits, how long a card lasts.
 // W77: the booking panel's add-ons (W77a: `readShopAddons()`): each one on sale with what a visitor pays. The panel's
 // days, sessions and group prices come from W77a's three public routes, asked by the browser (lib/book/api.ts).
+// W81: the memberships' and the passes' read (W80a: `readShopMemberships()`): the plans and passes on sale, each price,
+// a yearly price's before-price, "Save up to N%" and how long a pass lasts.
 
 export type { ShopAddon } from '@/server/rules/shop/booking'
 export type { ShopEvent, ShopEventAccess } from '@/server/rules/shop/events'
+export type { ShopLevel, ShopMemberships, ShopPass, ShopPlan } from '@/server/rules/shop/memberships'
 export type { Shop, ShopCategory, ShopGiftCard, ShopGiftCardPage, ShopProduct } from '@/server/rules/shop/reads'
 
 /** How long the shop's read may be kept: a page's prices and sizes are at most this old (the brief's "at most 60 seconds"). */
@@ -75,6 +79,18 @@ export const readShopGiftCardKept = cache(async (sanityId: string): Promise<Shop
 
 /** W77: the add-ons on sale with a price for a visitor (W77a), in the catalogue's own order, kept as the shop is. */
 const keptAddons = unstable_cache(async (): Promise<ShopAddon[]> => readShopAddons(), ['shop-addons'], { revalidate: SHOP_KEPT_SECONDS })
+
+/**
+ * W81: the plans and passes on sale with their prices, the yearly before-prices and "Save up to N%" (W80a), kept as
+ * the shop is.
+ */
+const keptMemberships = unstable_cache(async (): Promise<ShopMemberships> => readShopMemberships(), ['shop-memberships'], { revalidate: SHOP_KEPT_SECONDS })
+
+/** The memberships and passes for their modules, once for a request. A read that fails throws: never an empty row of cards. */
+export const readShopMembershipsKept = cache(async (): Promise<ShopMemberships> => {
+  await connection()
+  return keptMemberships()
+})
 
 /** The add-ons for the booking panel, once for a request. A read that fails throws; the frame decides what to do without them (lib/book/read.ts). */
 export const readShopAddonsKept = cache(async (): Promise<ShopAddon[]> => {

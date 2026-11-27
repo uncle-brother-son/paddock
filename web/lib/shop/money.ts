@@ -8,6 +8,15 @@ export function pounds(money: string): string {
   return pennies === '00' ? `£${whole}` : `£${whole}.${pennies}`
 }
 
+/**
+ * W81: a price as the Membership and Session Pass cards write it: as `pounds`, with its thousands marked ("£1,308",
+ * "£490"). Only the text is changed: no number is made of it.
+ */
+export function poundsWithThousands(money: string): string {
+  const [whole, ...pence] = pounds(money).slice(1).split('.')
+  return `£${[(whole ?? '0').replace(/\B(?=(\d{3})+(?!\d))/g, ','), ...pence].join('.')}`
+}
+
 /** W77: a price with its pence always written, as the booking panel's "Your booking" does: "£15.00", "£4.50". */
 export function poundsAndPence(money: string): string {
   const [whole = '0', pence = ''] = money.trim().split('.')

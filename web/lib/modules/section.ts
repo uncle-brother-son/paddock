@@ -6,6 +6,16 @@
 export const SECTION_THEMES = ['light', 'dark', 'fjord', 'mud'] as const
 export type SectionTheme = (typeof SECTION_THEMES)[number]
 
+/**
+ * The modes a section that holds a form can have. docs/build-standards.md: Fjord and Mud are never used for forms
+ * (their muted words are too faint to read there). W81: the Memberships and SessionPasses modules, whose cards are
+ * radio groups, are Light or Dark only; the Studio offers them those two, and the site takes any other as none.
+ */
+export const FORM_SECTION_THEMES = ['light', 'dark'] as const
+
+/** The theme of a section that holds a form: Light or Dark as given, and none for anything else. */
+export const formThemeOf = (theme: SectionTheme | null | undefined): SectionTheme | null => (theme === 'light' || theme === 'dark' ? theme : null)
+
 /** A Section ID: lowercase letters, numbers and hyphens, with no hyphen at either end and no two together. */
 export const SECTION_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
@@ -20,6 +30,13 @@ export function sectionAddress(raw: string | null | undefined): string | null {
   const id = sectionIdOf(raw)
   return id ? `#${id}` : null
 }
+
+/**
+ * W81: the id a page's first module of these kinds has when an editor gives it none, as the events list is `events`
+ * (WQ60): PageHeader's buttons on Memberships & Passes go to #memberships and #passes (WQ83). By the module's Sanity
+ * type; the Studio's checks read this too, so a second section can't be given either id.
+ */
+export const DEFAULT_SECTION_IDS = { memberships: 'memberships', sessionPasses: 'passes' } as const
 
 /** Whether an address names a place on the page it is on. */
 export const isSectionAddress = (href: string): boolean => href.startsWith('#') && href.length > 1

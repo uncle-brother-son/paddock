@@ -26,6 +26,8 @@ vi.mock('@/server/rules/shop/reads', () => ({ readShop: vi.fn(), readShopGiftCar
 vi.mock('@/server/rules/shop/events', () => ({ readShopEvents, readShopEvent }))
 // W77: lib/shop/read.ts reads the booking panel's add-ons too; the events' pages never ask for them.
 vi.mock('@/server/rules/shop/booking', () => ({ readShopAddons: vi.fn() }))
+// W81: and the memberships and passes.
+vi.mock('@/server/rules/shop/memberships', () => ({ readShopMemberships: vi.fn() }))
 
 const { findEventPage, readEventsListAddress, readUpcomingEventCards } = await import('./pages')
 

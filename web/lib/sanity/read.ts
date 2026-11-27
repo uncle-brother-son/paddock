@@ -11,10 +11,12 @@ import {
   HOME_PAGE_QUERY,
   INFO_MENU_QUERY,
   INFO_PAGE_QUERY,
+  MEMBERSHIP_CARDS_QUERY,
   MOVED_SLUG_QUERY,
   NAVIGATION_QUERY,
   PRODUCT_CARDS_QUERY,
   PRODUCT_QUERY,
+  SESSION_PASS_CARDS_QUERY,
   SHOP_SETTINGS_QUERY,
   SITE_SETTINGS_QUERY,
 } from './queries'
@@ -28,10 +30,12 @@ import {
   giftCardSchema,
   infoMenuSchema,
   infoPageSchema,
+  membershipCardsSchema,
   movedSlugSchema,
   navigationSchema,
   productCardsSchema,
   productSchema,
+  sessionPassCardsSchema,
   shopSettingsSchema,
   siteSettingsSchema,
 } from './schemas'
@@ -59,6 +63,8 @@ export const reads = {
   eventsListPage: read(EVENTS_LIST_PAGE_QUERY, eventsListPageSchema.nullable()),
   giftCard: read(GIFT_CARD_QUERY, giftCardSchema.nullable()),
   addons: read(ADDONS_QUERY, addonsSchema),
+  membershipCards: read(MEMBERSHIP_CARDS_QUERY, membershipCardsSchema),
+  sessionPassCards: read(SESSION_PASS_CARDS_QUERY, sessionPassCardsSchema),
   movedSlug: read(MOVED_SLUG_QUERY, movedSlugSchema.nullable()),
 } as const
 

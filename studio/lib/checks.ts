@@ -1,6 +1,6 @@
 // What the Studio refuses, as plain functions: each answers true, or the words an editor sees. No Sanity import here,
 // so web/lib/sanity/studio-checks.test.ts can test them (the website's build has no Studio packages).
-import { SECTION_ID_PATTERN } from '../../web/lib/modules/section'
+import { DEFAULT_SECTION_IDS, SECTION_ID_PATTERN } from '../../web/lib/modules/section'
 import { slugProblem, type SlugPlace } from '../../web/lib/routes/reserved-slugs'
 
 type Verdict = true | string
@@ -100,24 +100,42 @@ export function checkSectionId(id: string | undefined): Verdict {
 }
 
 /**
+ * The id a page's first module of a kind has when an editor gives it none: the events list is `events` (WQ60), and
+ * W81's Memberships and Session Passes modules are `memberships` and `passes` (the site's `DEFAULT_SECTION_IDS`).
+ */
+const DEFAULT_IDS: Readonly<Record<string, string>> = { upcomingEvents: EVENTS_SECTION_ID, ...DEFAULT_SECTION_IDS }
+
+/** What an editor calls the module that has each of those ids. */
+const DEFAULT_ID_OWNERS: Readonly<Record<string, string>> = {
+  [EVENTS_SECTION_ID]: 'the Upcoming Events list',
+  [DEFAULT_SECTION_IDS.memberships]: 'the Memberships module',
+  [DEFAULT_SECTION_IDS.sessionPasses]: 'the Session Passes module',
+}
+
+/**
  * The id each module's section has on the site, by the module's key: the one an editor gave it, and for the page's
- * first Upcoming Events list with none of its own, `events`.
+ * first Upcoming Events list, Memberships module or Session Passes module with none of its own, `events`,
+ * `memberships` or `passes`.
  */
 export function sectionIdsOf(modules: readonly PageModuleValue[] | undefined): Array<{ key: string | undefined; id: string }> {
   const list = modules ?? []
-  const firstEvents = list.find((module) => module._type === 'upcomingEvents')
+  const firstOf = (type: string | undefined) => list.find((one) => one._type === type)
   return list.flatMap((module) => {
-    const id = module.sectionId?.trim() || (module === firstEvents ? EVENTS_SECTION_ID : '')
+    const byDefault = module._type !== undefined && firstOf(module._type) === module ? (DEFAULT_IDS[module._type] ?? '') : ''
+    const id = module.sectionId?.trim() || byDefault
     return id ? [{ key: module._key, id }] : []
   })
 }
 
-/** A Section ID is the only one of its name on its page (the events list's own `events` counts). */
+/** A Section ID is the only one of its name on its page (an id a module has by default counts: the events list's `events`). */
 export function checkSectionIdUnique(id: string | undefined, key: string | undefined, modules: readonly PageModuleValue[] | undefined): Verdict {
   if (!id) return true
   const others = sectionIdsOf(modules).filter((section) => section.key !== key && section.id === id)
   if (others.length === 0) return true
-  return id === EVENTS_SECTION_ID ? `Another section on this page is "${id}" (the Upcoming Events list is, unless it has an ID of its own).` : `Another section on this page has the ID "${id}".`
+  // The words name the module that has the id by default only when that is why it has it (the events list's always did).
+  const typed = (modules ?? []).some((one) => one._key === others[0]?.key && one.sectionId?.trim() === id)
+  const owner = id === EVENTS_SECTION_ID || !typed ? DEFAULT_ID_OWNERS[id] : undefined
+  return owner ? `Another section on this page is "${id}" (${owner} is, unless it has an ID of its own).` : `Another section on this page has the ID "${id}".`
 }
 
 /** A link to a section goes to one this page has. Only a page built from modules has sections. */
@@ -129,6 +147,23 @@ export function checkSectionLink(link: LinkTo | undefined, documentType: string 
   const shape = checkSectionId(id)
   if (shape !== true) return shape
   return sectionIdsOf(modules).some((section) => section.id === id) ? true : `No section on this page has the ID "${id}". Give it to a module, in its Section settings.`
+}
+
+// W81 (WQ84): a Membership card's two plans, and a Session Pass card's two passes.
+
+/** A reference to another document, as these checks read it. */
+export type Reference = { _ref?: string }
+
+/** A card's Core and All-Access are two different documents: one plan (or pass) can't be sold under both names. */
+export function checkCardPlans(core: Reference | undefined, allAccess: Reference | undefined, kind: 'plan' | 'pass'): Verdict {
+  if (!core?._ref || !allAccess?._ref || core._ref !== allAccess._ref) return true
+  return `This is the same ${kind} as Core. Choose a different ${kind} for each, or leave one empty.`
+}
+
+/** A card's line in a list of the Studio: its two plans (or passes) by name, or that it has none yet. */
+export function cardPlansLine(core: string | undefined, allAccess: string | undefined, kind: 'plan' | 'pass'): string {
+  const names = [core, allAccess].filter((name): name is string => Boolean(name?.trim()))
+  return names.length > 0 ? names.join(' · ') : `No ${kind} chosen yet: the site does not show this card`
 }
 
 /** A module's button, as these checks read it. */

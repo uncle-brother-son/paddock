@@ -109,7 +109,8 @@ const MODULE_BUTTON = `{text, "link": link${LINK}}`
 const moduleButtonAt = (field: string): string => `select(defined(${field}.text) && defined(${field}.link.destination) => ${field}${MODULE_BUTTON}, null)`
 
 /** The kinds of module the site draws. `hero` is HeroMedia's old name (W79). */
-const MODULE_TYPES = '["hero", "heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer"]'
+const MODULE_TYPES =
+  '["hero", "heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer", "memberships", "sessionPasses"]'
 
 /**
  * W73b: a page's modules, top to bottom, each with the fields of its own kind. A kind the site doesn't know is left
@@ -125,6 +126,9 @@ const MODULE_TYPES = '["hero", "heroMedia", "upcomingEvents", "pageHeader", "gal
  * and on every module its section's theme (WQ81: null is Light, the page's own; any word but the four is null) and
  * its Section ID (WQ83: null with none). A module's button is there only with both its words and its link; a
  * question only with its words; a gallery's item only with its file. A choice an editor has not made is its default.
+ *
+ * W81: the Memberships and Session Passes modules. An editor gives each its heading, and Memberships the note under
+ * its cards; the cards themselves are the Membership and Session Pass documents (the two queries after the pages').
  */
 const MODULES = `coalesce(modules[_type in ${MODULE_TYPES}]{
   "type": select(_type == "hero" => "heroMedia", _type),
@@ -169,7 +173,9 @@ const MODULES = `coalesce(modules[_type in ${MODULE_TYPES}]{
       null
     )
   },
-  _type == "upcomingEvents" => {heading}
+  _type == "upcomingEvents" => {heading},
+  _type == "memberships" => {heading, "note": ${richTextAt('note')}},
+  _type == "sessionPasses" => {heading}
 }, [])`
 
 const CONTENT_PAGE = `{
@@ -187,6 +193,32 @@ export const HOME_PAGE_QUERY = `*[_type == "contentPage" && ${PUBLISHED} && ${IS
 
 /** The page at /[slug] ($slug). */
 export const CONTENT_PAGE_QUERY = `*[_type == "contentPage" && ${PUBLISHED} && slug.current == $slug][0]${CONTENT_PAGE}`
+
+/** W81 (WQ86): a card's benefits, each with the billing it shows for: any word but the two is both. One with no words is left out. */
+const benefitsAt = (field: string): string => `coalesce(${field}[defined(text)]{"key": _key, text, "showFor": select(showFor in ["monthly", "yearly"] => showFor, "both")}, [])`
+
+/** A card's place in its row: its Order, the lowest first; one with none comes after those with one, the first made first. */
+const CARD_ORDER = 'order(coalesce(order, 1000000) asc, _createdAt asc)'
+
+/**
+ * W81 (WQ84): the Membership cards, in their order: each one's name, the line above it, its benefits, and its two
+ * plans by their document ids (null with none chosen, or one that is not published). Which plans are on sale, and
+ * every price, come from the Worker by those ids (lib/memberships/cards.ts).
+ */
+export const MEMBERSHIP_CARDS_QUERY = `*[_type == "membershipCard" && ${PUBLISHED} && defined(name)] | ${CARD_ORDER}{
+  "id": _id, name, line,
+  "corePlan": corePlan->_id,
+  "allAccessPlan": allAccessPlan->_id,
+  "benefits": ${benefitsAt('benefits')},
+  "herdBenefits": ${benefitsAt('herdBenefits')}
+}`
+
+/** W81 (WQ84): the Session Pass cards, in their order, each with its two passes by their document ids. */
+export const SESSION_PASS_CARDS_QUERY = `*[_type == "sessionPassCard" && ${PUBLISHED} && defined(name)] | ${CARD_ORDER}{
+  "id": _id, name, line,
+  "corePass": corePass->_id,
+  "allAccessPass": allAccessPass->_id
+}`
 
 /** The info page at /info/[slug] ($slug). */
 export const INFO_PAGE_QUERY = `*[_type == "infoPage" && ${PUBLISHED} && slug.current == $slug][0]{

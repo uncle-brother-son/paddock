@@ -91,7 +91,21 @@ describe('W72a: galleries and categories', () => {
   })
 
   it('every read W72a and W73b changed has its query on record', () => {
-    expect(Object.keys(madeFrom).sort()).toEqual(['addons', 'contentPage', 'event', 'eventCards', 'eventsListPage', 'giftCard', 'homePage', 'movedSlug', 'product', 'productCards'])
+    // W81: and the two reads of the Membership and Session Pass cards (briefs/W81-logs/tools/gen-page-samples.mjs).
+    expect(Object.keys(madeFrom).sort()).toEqual([
+      'addons',
+      'contentPage',
+      'event',
+      'eventCards',
+      'eventsListPage',
+      'giftCard',
+      'homePage',
+      'membershipCards',
+      'movedSlug',
+      'product',
+      'productCards',
+      'sessionPassCards',
+    ])
   })
 
   // W77: each add-on's first picture, for the booking panel's cards. Its sample was made by the real engine
@@ -282,7 +296,9 @@ describe('W73b: HeroMedia module', () => {
     for (const query of [reads.homePage.query, reads.contentPage.query]) {
       expect(query).not.toContain('"hero":')
       expect(query).not.toContain('hero.media')
-      expect(query).toContain('modules[_type in ["hero", "heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer"]]')
+      expect(query).toContain(
+        'modules[_type in ["hero", "heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer", "memberships", "sessionPasses"]]',
+      )
       // W79 (WQ79): a module saved as `hero` before the rename is read as HeroMedia, until the lead has moved Home's.
       expect(query).toContain('"type": select(_type == "hero" => "heroMedia", _type)')
     }

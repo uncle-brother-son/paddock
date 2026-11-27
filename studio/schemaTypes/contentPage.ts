@@ -44,6 +44,8 @@ export const contentPage = defineType({
         defineArrayMember({ type: 'textBlock' }),
         defineArrayMember({ type: 'textMediaSticky' }),
         defineArrayMember({ type: 'accordionList' }),
+        defineArrayMember({ type: 'memberships' }),
+        defineArrayMember({ type: 'sessionPasses' }),
         defineArrayMember({ type: 'upcomingEvents' }),
         defineArrayMember({ type: 'sectionSpacer' }),
       ],

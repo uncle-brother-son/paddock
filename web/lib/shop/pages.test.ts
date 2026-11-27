@@ -33,6 +33,8 @@ vi.mock('@/server/rules/shop/reads', () => ({ readShop, readShopGiftCard }))
 vi.mock('@/server/rules/shop/events', () => ({ readShopEvents: vi.fn(), readShopEvent: vi.fn() }))
 // W77: and the booking panel's add-ons, which the frame asks for (lib/book/read.ts).
 vi.mock('@/server/rules/shop/booking', () => ({ readShopAddons: vi.fn() }))
+// W81: and the memberships and passes, which their modules ask for (lib/memberships/pages.ts).
+vi.mock('@/server/rules/shop/memberships', () => ({ readShopMemberships: vi.fn() }))
 
 const { findGiftCardPage, findProductPage, readShopCatalogue } = await import('./pages')
 const { SHOP_KEPT_SECONDS } = await import('./read')
@@ -205,7 +207,7 @@ describe('the gift card, at /shop/gift-card (W76)', () => {
 })
 
 describe("the Worker's read of the shop", () => {
-  it('is kept for at most 60 seconds, under one key; W75: the events list and each event under their own; W76: the gift card under its own; W77: the add-ons under theirs', () => {
+  it('is kept for at most 60 seconds, under one key; W75: the events list and each event under their own; W76: the gift card under its own; W77: the add-ons under theirs; W81: the memberships and passes under theirs', () => {
     expect(SHOP_KEPT_SECONDS).toBe(60)
     expect(kept.calls).toEqual([
       { keys: ['shop'], options: { revalidate: 60 } },
@@ -213,6 +215,7 @@ describe("the Worker's read of the shop", () => {
       { keys: ['shop-event'], options: { revalidate: 60 } },
       { keys: ['shop-gift-card'], options: { revalidate: 60 } },
       { keys: ['shop-addons'], options: { revalidate: 60 } },
+      { keys: ['shop-memberships'], options: { revalidate: 60 } },
     ])
   })
 

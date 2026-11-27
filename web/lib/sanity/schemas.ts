@@ -191,6 +191,17 @@ export type TextBlockModule = z.infer<typeof textBlockModuleSchema>
 /** SectionSpacer (W80): empty space; it has only what every module has. */
 const sectionSpacerModuleSchema = z.object({ type: z.literal('sectionSpacer'), key: z.string(), ...sectionSettings })
 
+/**
+ * Memberships (W81): the Membership cards under the Monthly / Yearly switch. An editor gives it a heading (for
+ * screen readers: Figma draws none) and the note under the cards; the cards are documents of their own.
+ */
+const membershipsModuleSchema = z.object({ type: z.literal('memberships'), key: z.string(), ...sectionSettings, heading: text, note: richTextSchema })
+export type MembershipsModule = z.infer<typeof membershipsModuleSchema>
+
+/** SessionPasses (W81): the Session Pass cards. An editor gives it only a heading (for screen readers). */
+const sessionPassesModuleSchema = z.object({ type: z.literal('sessionPasses'), key: z.string(), ...sectionSettings, heading: text })
+export type SessionPassesModule = z.infer<typeof sessionPassesModuleSchema>
+
 /** One module of a page. Each kind of module is one more member here. */
 export const moduleSchema = z.discriminatedUnion('type', [
   heroMediaModuleSchema,
@@ -201,6 +212,8 @@ export const moduleSchema = z.discriminatedUnion('type', [
   textMediaStickyModuleSchema,
   textBlockModuleSchema,
   sectionSpacerModuleSchema,
+  membershipsModuleSchema,
+  sessionPassesModuleSchema,
 ])
 export type PageModule = z.infer<typeof moduleSchema>
 
@@ -317,6 +330,30 @@ export type GiftCard = z.infer<typeof giftCardSchema>
 /** W77: each add-on's first picture, by the add-on's document id; null when it has none (its card's picture area stays empty). */
 export const addonsSchema = z.array(z.object({ id: z.string(), picture: pictureSchema.nullable() }))
 export type AddonPictures = z.infer<typeof addonsSchema>
+
+/** W81 (WQ86): one benefit of a Membership card, and the billing it is listed under. */
+const cardBenefitSchema = z.object({ key: z.string(), text: z.string(), showFor: z.enum(['both', 'monthly', 'yearly']) })
+
+/**
+ * W81 (WQ84): the Membership cards in their order. `corePlan` and `allAccessPlan` are the plans' document ids, null
+ * with none chosen or one that isn't published: the Worker says which are on sale and what they cost.
+ */
+export const membershipCardsSchema = z.array(
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    line: text,
+    corePlan: text,
+    allAccessPlan: text,
+    benefits: z.array(cardBenefitSchema),
+    herdBenefits: z.array(cardBenefitSchema),
+  }),
+)
+export type MembershipCard = z.infer<typeof membershipCardsSchema>[number]
+
+/** W81 (WQ84): the Session Pass cards in their order, each with its two passes' document ids (null as a plan's). */
+export const sessionPassCardsSchema = z.array(z.object({ id: z.string(), name: z.string(), line: text, corePass: text, allAccessPass: text }))
+export type SessionPassCard = z.infer<typeof sessionPassCardsSchema>[number]
 
 /** Where an old slug's document is now (W72a): its current slug, and whether it is the page Site settings picks as home. */
 export const movedSlugSchema = z.object({ slug: z.string(), isHome: z.boolean() })

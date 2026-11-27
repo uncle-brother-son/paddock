@@ -2,7 +2,9 @@ import { serviceType } from './serviceType'
 import { product } from './product'
 import { addon } from './addon'
 import { membershipPlan } from './membershipPlan'
+import { membershipCard, planBenefit } from './membershipCard'
 import { sessionPassType } from './sessionPassType'
+import { sessionPassCard } from './sessionPassCard'
 import { giftCardType } from './giftCardType'
 import { event } from './event'
 import { productCategory } from './productCategory'
@@ -21,6 +23,7 @@ import { heroMedia } from './objects/heroMedia'
 import { leadText } from './objects/leadText'
 import { linkTo } from './objects/linkTo'
 import { media } from './objects/media'
+import { memberships } from './objects/memberships'
 import { moduleButton } from './objects/moduleButton'
 import { navLink } from './objects/navLink'
 import { pageHeader } from './objects/pageHeader'
@@ -28,6 +31,7 @@ import { picture } from './objects/picture'
 import { richText } from './objects/richText'
 import { sectionSpacer } from './objects/sectionSpacer'
 import { seo } from './objects/seo'
+import { sessionPasses } from './objects/sessionPasses'
 import { textBlock } from './objects/textBlock'
 import { textMediaSticky } from './objects/textMediaSticky'
 import { upcomingEvents } from './objects/upcomingEvents'
@@ -50,6 +54,9 @@ export const schemaTypes = [
   blogPost,
   productFamily,
   sizeGuide,
+  // W81 (WQ84): the cards the site shows for the memberships and the passes. The webhook reads neither.
+  membershipCard,
+  sessionPassCard,
 
   // Single documents (Sanity-only): one of each, see structure.ts
   siteSettings,
@@ -66,6 +73,7 @@ export const schemaTypes = [
   navLink,
   leadText,
   moduleButton,
+  planBenefit,
 
   // A page's modules (05 Modules > Content)
   heroMedia,
@@ -77,4 +85,7 @@ export const schemaTypes = [
   textMediaSticky,
   textBlock,
   sectionSpacer,
+  // 05 Modules > Content, W81
+  memberships,
+  sessionPasses,
 ]
