@@ -1,7 +1,7 @@
 import type { ShopEventAvailabilityRouteOutput } from '@/contracts/shop'
 import { eventLive, type EventCardView, type EventView } from '@/lib/events/event'
 import { whenLine } from '@/lib/dates'
-import { cardSpaces } from '@/lib/events/format'
+import { cardSoldOut, cardSpaces } from '@/lib/events/format'
 import type { SizedImage } from '@/lib/sanity/image'
 import type { RichText } from '@/lib/sanity/schemas'
 import type { GalleryItem } from '@/lib/shop/product'
@@ -100,7 +100,7 @@ export function sampleEventCard(
   id: string,
   { name = 'Aufguss Session with Henry', startsAt = SAMPLE_STARTS_AT, spacesLeft = 6, colour = MOSS, steam = 3, price = '£25', membersOnly = false }: CardOptions = {},
 ): EventCardView {
-  return { id, href: `/events/${id}`, name, picture: { ...stove(colour, steam), alt: '' }, when: whenLine(startsAt), startsAt, spaces: cardSpaces(spacesLeft), price, membersOnly }
+  return { id, href: `/events/${id}`, name, picture: { ...stove(colour, steam), alt: '' }, when: whenLine(startsAt), startsAt, spaces: cardSpaces(spacesLeft), price, soldOut: cardSoldOut(spacesLeft), membersOnly }
 }
 
 export const SAMPLE_EVENT_CARDS = {

@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { ProductInfoContainer } from '@/components/components/shop/ProductInfoContainer'
 import { Grid } from '@/components/layout/Grid'
 import type { InfoTab } from '@/components/modules/shop/ProductInfoPanel'
-import { FORMAT_PARAM, giftCardAddress, giftCardFormat, type GiftCardFormat, type GiftCardView } from '@/lib/shop/gift-card'
+import { FORMAT_PARAM, giftCardAddress, giftCardFormat, tabsForFormat, type GiftCardFormat, type GiftCardView } from '@/lib/shop/gift-card'
 
 import { ProductGallery } from './ProductGallery'
 
@@ -55,7 +55,7 @@ export function GiftCardDetail({ giftCard, format: asked, tabs, showAddress = sh
         {/* Keyed by the format: the other card's gallery starts at its first picture. */}
         <ProductGallery key={format} items={giftCard.galleries[format]} label="Gift card pictures" {...(reducedMotion === undefined ? {} : { reducedMotion })} />
       </div>
-      <ProductInfoContainer type="gift card" giftCard={{ id, name, amounts, other }} format={format} onFormat={choose} tabs={tabs} className="col-span-full md:col-span-7 md:col-start-15" />
+      <ProductInfoContainer type="gift card" giftCard={{ id, name, amounts, other }} format={format} onFormat={choose} tabs={tabsForFormat(tabs, format)} className="col-span-full md:col-span-7 md:col-start-15" />
     </Grid>
   )
 }

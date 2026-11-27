@@ -1,5 +1,12 @@
 import { defineField, defineType } from 'sanity'
 
+/**
+ * A new document's SEO starts empty (W83). Sanity fills a new document's fields from their types' defaults, and the
+ * Share Image's (a picture, Decorative off) would give every new document an empty share picture. A document's own
+ * initial value is laid over those defaults, so this one takes the SEO away again (as fields/thumbnail.ts does).
+ */
+export const NO_SEO_AT_FIRST = { seo: undefined }
+
 /** Search and link previews. All optional: the site makes each from the page's own content when it is empty (WQ6 item 9). */
 export const seo = defineType({
   name: 'seo',

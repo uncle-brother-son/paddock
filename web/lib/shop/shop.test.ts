@@ -7,7 +7,7 @@ import { availabilityAddress, availabilityFrom, readAvailability } from './avail
 import { addToBag } from './bag'
 import { cardTag, giftCardCard, isNewIn, londonToday, productCard, shopCategories, shopItems, type ShopItem } from './cards'
 import { itemCount, SHOP_PAGE_SIZE, shopAddress, shopListing, shopQuery, sortedItems } from './listing'
-import { inPence, pounds } from './money'
+import { inPence, pounds, poundsAndPence } from './money'
 import { colourSwatches, fulfilmentLine, galleryItems, materialsOf, metaDescription, plainText, priceLine, productSizes, productTitle, productView, similarCards } from './product'
 import type { Shop, ShopProduct } from './read'
 
@@ -71,7 +71,10 @@ const TODAY = '2026-11-24'
 
 describe('money as the designs write it', () => {
   it('whole pounds have no pence; anything else has two', () => {
-    expect(['45.00', '40.50', '40.5', '1200.00', '0.99'].map(pounds)).toEqual(['£45', '£40.50', '£40.50', '£1200', '£0.99'])
+    expect(['45.00', '40.50', '40.5', '1200.00', '0.99'].map(pounds)).toEqual(['£45', '£40.50', '£40.50', '£1,200', '£0.99'])
+    // W83: the site's one money format marks thousands, and nothing below a thousand.
+    expect(['999.00', '1000.00', '1308.50'].map(pounds)).toEqual(['£999', '£1,000', '£1,308.50'])
+    expect(['999.00', '1000.00', '1308.50', '4.5'].map(poundsAndPence)).toEqual(['£999.00', '£1,000.00', '£1,308.50', '£4.50'])
   })
   it('prices sort as pence, not as text', () => {
     expect(inPence('100.00')).toBeGreaterThan(inPence('28.00'))

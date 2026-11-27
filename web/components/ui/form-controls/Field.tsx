@@ -92,9 +92,16 @@ export function TextInput({ label, value, onValue, error = null, note = null, cl
 
 type TextAreaProps = Shared & Omit<ComponentPropsWithoutRef<'textarea'>, 'value' | 'onChange' | 'className' | 'placeholder' | 'id' | 'rows'> & { ref?: Ref<HTMLTextAreaElement> }
 
+/** A TextArea's words start as an Input's: the first line's capitals 16px from the top. */
+const AREA_TOP = 'pt-[calc(var(--spacing-16)_-_(1lh_-_1cap)_/_2)]'
+
 /**
- * Several lines (Figma "TextField", as the Gift Card page has it: 66px): room for two lines, the first line's
- * capitals 16px from the top as an Input's are. More than two lines scroll inside it; it can't be dragged bigger.
+ * Several lines (Figma "TextField", as the Gift Card page has it: 66px): room for two lines at rest, the first line's
+ * capitals 16px from the top as an Input's are. It grows a line at a time as the words need (W83, Wayne 27 Nov: so a
+ * whole gift message always shows, never scrolling inside it); it can't be dragged bigger.
+ *
+ * Its height is an unseen copy of its words in the same grid cell, wrapped as the field wraps them: the grid's row is
+ * as tall as the copy, and the field is stretched to the row. No script measures it.
  */
 export function TextArea({ label, value, onValue, error = null, note = null, className, ref, ...rest }: TextAreaProps) {
   const id = useId()
@@ -103,19 +110,30 @@ export function TextArea({ label, value, onValue, error = null, note = null, cla
       <label htmlFor={id} className="sr-only">
         {label}
       </label>
-      <textarea
-        ref={ref}
-        id={id}
-        value={value}
-        onChange={(event) => onValue(event.target.value)}
-        placeholder={label}
-        aria-invalid={error !== null}
-        {...described(note, `${id}-note`, error, `${id}-error`)}
-        data-lenis-prevent=""
-        // Two lines: the capitals of the first, 4px, and a whole line, with 16px above and below (Figma: 66px).
-        className={`${FIELD} h-[calc(1cap_+_1lh_+_var(--spacing-4)_+_var(--spacing-32))] resize-none py-[calc(var(--spacing-16)_-_(1lh_-_1cap)_/_2)] ${fill(error !== null)}`}
-        {...rest}
-      />
+      <div className="grid">
+        {/* The copy: the field's words and padding, and 4px more beneath, so two lines are Figma's 66px (the capitals
+            of the first, 4px, and a whole line, with 16px above and below) and each line more adds one line. The
+            space after the words keeps a last empty line. */}
+        <div
+          aria-hidden="true"
+          data-field-copy=""
+          className={`${FIELD} invisible col-start-1 row-start-1 min-h-[calc(1cap_+_1lh_+_var(--spacing-4)_+_var(--spacing-32))] whitespace-pre-wrap [overflow-wrap:break-word] ${AREA_TOP} pb-[calc(var(--spacing-16)_-_(1lh_-_1cap)_/_2_+_var(--spacing-4))]`}
+        >
+          {`${value} `}
+        </div>
+        <textarea
+          ref={ref}
+          id={id}
+          rows={1}
+          value={value}
+          onChange={(event) => onValue(event.target.value)}
+          placeholder={label}
+          aria-invalid={error !== null}
+          {...described(note, `${id}-note`, error, `${id}-error`)}
+          className={`${FIELD} col-start-1 row-start-1 resize-none overflow-hidden [overflow-wrap:break-word] ${AREA_TOP} pb-0 ${fill(error !== null)}`}
+          {...rest}
+        />
+      </div>
       <Beneath note={note} noteId={`${id}-note`} error={error} errorId={`${id}-error`} />
     </div>
   )

@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
 
 import { OverlayTexture } from '@/components/ui/media/Overlay'
+import { painted } from '@/components/ui/story-kit'
 
 import { EventPageView } from './EventPageView'
 import { SAMPLE_EVENT, SAMPLE_EVENTS, SAMPLE_LIST_ADDRESS, SAMPLE_OTHER_EVENTS, sampleAvailability } from './sample-events'
@@ -94,6 +95,10 @@ export const Quantity: Story = {
     await expect([count.textContent, fewer.hasAttribute('disabled')]).toEqual(['2', false])
     for (let press = 0; press < 4; press += 1) await userEvent.click(more)
     await expect([count.textContent, more.hasAttribute('disabled')]).toEqual(['6', true])
+    // At the most the plus is faded, Text/Muted Primary as IconButton's disabled state (W83, Wayne 27 Nov), and the
+    // minus is not.
+    const muted = painted(more, 'text-text-muted-primary', 'color')
+    await waitFor(() => expect([getComputedStyle(more).color, getComputedStyle(fewer).color === muted]).toEqual([muted, false]))
     // At the most a press does nothing.
     await userEvent.click(more)
     await expect(count.textContent).toBe('6')

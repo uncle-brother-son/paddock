@@ -300,10 +300,11 @@ describe('W73b: HeroMedia module', () => {
       expect(query).not.toContain('"hero":')
       expect(query).not.toContain('hero.media')
       expect(query).toContain(
-        'modules[_type in ["hero", "heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer", "memberships", "sessionPasses"]]',
+        'modules[_type in ["heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer", "memberships", "sessionPasses"]]',
       )
-      // W79 (WQ79): a module saved as `hero` before the rename is read as HeroMedia, until the lead has moved Home's.
-      expect(query).toContain('"type": select(_type == "hero" => "heroMedia", _type)')
+      // W83: the module's old name (`hero`, before W79) is no longer read: no document holds it.
+      expect(query).toContain('"type": _type,')
+      expect(query).not.toMatch(/"hero"/)
     }
     const withLink = (destination: string) => ({ ...answers.contentPage, modules: [{ ...modules[0], button: { text: 'Go', link: { destination, document: null, url: null, sectionId: null } } }] })
     expect(reads.contentPage.schema.safeParse(withLink('giftCard')).success).toBe(true)
@@ -312,15 +313,15 @@ describe('W73b: HeroMedia module', () => {
 })
 
 // W82 (WQ90): a content page's and an info page's thumbnail is the media block, a picture or a video. The navigation
-// and the info page samples were made by the real engine (briefs/W82-logs/tools/gen-page-samples.mjs) over Exclusive
-// Hire's thumbnail saved the old way (a plain picture), Terms' a media block picture, The Experience's a video, and
-// Manage Cookies' the empty old default the live one holds.
+// and the info page samples were made by the real engine (briefs/W83-logs/tools: gen-samples-w72a.mjs and
+// gen-page-samples.mjs) over Exclusive Hire's and Terms' thumbnails as media block pictures (Hire's with a crop), The
+// Experience's a video, and Manage Cookies' the empty old default the live one held.
 describe('W82: page thumbnails', () => {
   type Thumbnail = { kind: string; image?: { ref: string; crop: unknown }; url?: string; poster?: { ref: string }; description?: string } | null
   const thumbnailOf = (label: string): Thumbnail =>
     ((answers.navigation.menuLinks as Array<{ label: string; link: { document: { thumbnail: Thumbnail } | null } }>).find((link) => link.label === label)?.link.document?.thumbnail ?? null)
 
-  it('a thumbnail saved as a plain picture before W82 is read as a picture, its crop kept', () => {
+  it('a media block picture is read as a picture, its crop kept', () => {
     expect(thumbnailOf('Exclusive Hire')).toMatchObject({ kind: 'image', image: { ref: 'image-thumb-600x400-jpg', crop: { left: 0.1 } } })
     expect(answers.contentPage.thumbnail).toEqual(thumbnailOf('Exclusive Hire'))
   })
@@ -334,8 +335,11 @@ describe('W82: page thumbnails', () => {
     expect(['Manage Cookies', 'Home', 'Solstice'].map(thumbnailOf)).toEqual([null, null, null])
   })
 
-  it('the old shape is read only until the tidy-up: each thumbnail read names it', () => {
-    for (const name of ['navigation', 'contentPage', 'infoPage'] as const) expect(reads[name].query).toContain('defined(thumbnail.asset._ref) => {"kind": "image", "image": thumbnail{')
+  it('the shape saved before W82 (a plain picture) is no longer read (W83): no thumbnail read names it', () => {
+    for (const name of ['navigation', 'contentPage', 'infoPage'] as const) {
+      expect(reads[name].query).toContain('"thumbnail": select(\n  defined(thumbnail) => thumbnail{"item": ')
+      expect(reads[name].query).not.toContain('thumbnail.asset._ref')
+    }
     expect(reads.contentPage.schema.safeParse({ ...answers.contentPage, thumbnail: { ref: 'image-thumb-600x400-jpg', width: 600, height: 400, alt: '', crop: null, hotspot: null } }).success).toBe(false)
   })
 })

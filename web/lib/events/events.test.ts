@@ -33,8 +33,8 @@ describe('the spaces left', () => {
     expect([spacesLine(6), spacesLine(1), spacesLine(12)]).toEqual(['6 spaces left', '1 space left', '12 spaces left'])
   })
 
-  it('on a card, in its capitals; a sold-out event says "Sold out" in their place', () => {
-    expect([cardSpaces(6), cardSpaces(1), cardSpaces(0)]).toEqual(['6 Spaces Left', '1 Space Left', 'Sold out'])
+  it('on a card, in its capitals; a sold-out event says "Sold Out" in their place', () => {
+    expect([cardSpaces(6), cardSpaces(1), cardSpaces(0)]).toEqual(['6 Spaces Left', '1 Space Left', 'Sold Out'])
   })
 
   it("a cancelled event's own line", () => {
@@ -114,9 +114,9 @@ describe('the cards of a list', () => {
   it("the list is the Worker's, in its order (soonest first); an event Sanity does not publish is left out", () => {
     const upcoming = [onSale({ sanityId: 'event-2', startsAt: '2026-11-03T16:00:00+00:00' }), onSale({ sanityId: 'not-in-sanity' }), onSale({ sanityId: 'event-1', startsAt: '2026-12-21T19:30:00+00:00', spacesLeft: 0, state: 'sold_out' })]
     const cards = upcomingCards({ content: [...content, second], upcoming })
-    expect(cards.map((card) => [card.id, card.spaces])).toEqual([
-      ['event-2', '6 Spaces Left'],
-      ['event-1', 'Sold out'],
+    expect(cards.map((card) => [card.id, card.spaces, card.soldOut])).toEqual([
+      ['event-2', '6 Spaces Left', false],
+      ['event-1', 'Sold Out', true],
     ])
     // An event Sanity publishes that the Worker does not list (off sale, started, cancelled) has no card.
     expect(upcomingCards({ content: [...content, second], upcoming: [] })).toEqual([])

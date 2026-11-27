@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
 import { useState } from 'react'
-import { expect, userEvent } from 'storybook/test'
+import { expect, userEvent, waitFor } from 'storybook/test'
 
 import { NO_RECIPIENT, recipientWrong, type Recipient } from '@/lib/shop/gift-card'
 
@@ -74,7 +74,8 @@ export const Ticked: Story = {
     await expect([Math.round(box(name).top - box(gift.parentElement!).bottom), Math.round(box(email).top - box(name).bottom), Math.round(box(message).top - box(email).bottom)]).toEqual([32, 8, 8])
     await expect([Math.round(box(name).width), getComputedStyle(name).paddingLeft, getComputedStyle(name).fontSize]).toEqual([405, '16px', '14px'])
     await expect(Math.abs(box(name).height - box(email).height)).toBeLessThan(0.5)
-    // The message: an Input's height and one more line with 4px between (Figma: 66px beside 42).
+    // The message: an Input's height and one more line with 4px between (Figma: 66px beside 42). It grows as it is
+    // typed in (W83): see Message grows.
     await expect(Math.round(box(message).height - box(name).height)).toBe(24)
     await expect([message.tagName, getComputedStyle(message).resize]).toEqual(['TEXTAREA', 'none'])
     const counter = canvas.getByText('150 characters left')
@@ -124,4 +125,60 @@ export const CounterNearZero: Story = {
     await expect(canvas.getByText('0 characters left')).toBeVisible()
     await expect(message.getAttribute('aria-describedby')).toBe(canvas.getByText('0 characters left').id)
   },
+}
+
+/** A gift message as long as one can be, in words: the box must show all of it. */
+const LONGEST_MESSAGE = 'Happy birthday, Sam! A long sauna and a cold plunge on us, whenever you like. With all our love, and see you at the Paddock very soon. Jo, Ally and Kit'.slice(0, 150)
+
+/** The box shows every line of its words: nothing is left to scroll to inside it. */
+const allShown = (message: HTMLElement) => message.scrollHeight <= message.clientHeight
+
+/**
+ * W83 (Wayne, 27 Nov): the gift message box starts at two lines, as drawn (66px), and grows a line at a time as the
+ * words need, so a whole message always shows and nothing scrolls inside it; the counter stays 8px beneath it.
+ */
+const messageGrows = async ({ canvas }: { canvas: Parameters<NonNullable<Story['play']>>[0]['canvas'] }) => {
+  await document.fonts.ready
+  const message = canvas.getByRole('textbox', { name: 'Gift message' }) as HTMLTextAreaElement
+  const rest = box(message).height
+  await expect(Math.round(rest)).toBe(66)
+  // Two lines keep the box as drawn.
+  await userEvent.type(message, 'Happy birthday{Enter}Love, Jo')
+  await expect([Math.round(box(message).height), allShown(message)]).toEqual([66, true])
+  // A third line adds one line's height, and the counter moves down with the box.
+  await userEvent.type(message, '{Enter}x')
+  const three = box(message).height
+  await expect(three).toBeGreaterThan(rest + 10)
+  await expect(allShown(message)).toBe(true)
+  const counter = canvas.getByText(`${150 - message.value.length} characters left`)
+  await expect(Math.round(box(counter).top - box(message).bottom)).toBe(8)
+  // The longest message there can be shows whole.
+  await userEvent.clear(message)
+  await userEvent.type(message, LONGEST_MESSAGE)
+  await expect(message.value).toBe(LONGEST_MESSAGE)
+  await waitFor(() => expect(canvas.getByText('0 characters left')).toBeVisible())
+  await expect(allShown(message)).toBe(true)
+  await expect(getComputedStyle(message).overflowY).toBe('hidden')
+  await expect(Math.round(box(canvas.getByText('0 characters left')).top - box(message).bottom)).toBe(8)
+  // Emptied, it is two lines again.
+  await userEvent.clear(message)
+  await expect(Math.round(box(message).height)).toBe(66)
+}
+
+export const MessageGrows: Story = {
+  name: 'Message grows',
+  args: { ticked: true },
+  play: messageGrows,
+}
+
+/** The same on a phone, where the details are 358 wide: the longest message takes more lines, and still all show. */
+export const MessageGrowsOnAPhone: Story = {
+  name: 'Message grows, on a phone',
+  args: { ticked: true },
+  render: (args) => (
+    <div style={{ width: 358 }}>
+      <Kept {...args} />
+    </div>
+  ),
+  play: messageGrows,
 }

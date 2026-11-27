@@ -4,6 +4,7 @@ import { checkSlug } from '../lib/checks'
 import { isSlugFree } from '../lib/slugs'
 import { previousSlugs } from './fields/previousSlugs'
 import { NO_THUMBNAIL_AT_FIRST, thumbnail, THUMBNAIL_PREVIEW, thumbnailMedia } from './fields/thumbnail'
+import { NO_SEO_AT_FIRST } from './objects/seo'
 
 // Terms, Privacy, Health & Safety and the like, at /info/[slug] (WQ26).
 export const infoPage = defineType({
@@ -11,7 +12,7 @@ export const infoPage = defineType({
   title: 'Info Page',
   type: 'document',
   icon: InfoOutlineIcon,
-  initialValue: NO_THUMBNAIL_AT_FIRST,
+  initialValue: { ...NO_THUMBNAIL_AT_FIRST, ...NO_SEO_AT_FIRST },
   fields: [
     defineField({
       name: 'title',

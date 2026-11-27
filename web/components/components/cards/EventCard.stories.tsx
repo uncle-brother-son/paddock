@@ -33,20 +33,27 @@ const fontsIn = async (canvasElement: HTMLElement) => {
 /** The card's parts as Figma names them: the picture's frame, the name, the spaces, the date, the price, and "Members Only" when it is there. */
 const partsOf = (card: HTMLElement) => {
   const [name, spaces] = [...card.querySelectorAll<HTMLElement>('[data-event="name-and-spaces"] > span')] as [HTMLElement, HTMLElement]
-  const [price, membersOnly] = [...card.querySelectorAll<HTMLElement>('[data-event="price"] > span')] as [HTMLElement, HTMLElement | undefined]
+  const [price, membersOnly] = [...card.querySelectorAll<HTMLElement>('[data-event="price"] > span, [data-event="price"] > s')] as [HTMLElement, HTMLElement | undefined]
   return { frame: card.querySelector('a > div') as HTMLElement, name, spaces, when: card.querySelector('time') as HTMLElement, price, membersOnly }
 }
 
-/** Copy 14 for the name and Copy 12 for the rest, in Text/Primary, the spaces in Text/Muted Primary: as every variant draws them. */
+/**
+ * Copy 14 for the name and Copy 12 for the rest, in Text/Primary, the spaces in Text/Muted Primary: as every variant
+ * draws them. Type=sold out (1896:8636, 1896:8646): "Sold Out" in Label 12 (capitals, medium), Text/Primary, and the
+ * price struck through in Text/Muted Primary.
+ */
 const expectStyles = async (card: HTMLElement) => {
+  const soldOut = card.dataset.type === 'sold out'
   const { name, spaces, when, price, membersOnly } = partsOf(card)
   const texts = [name, spaces, when, price, ...(membersOnly ? [membersOnly] : [])]
   await expect(texts.map((text) => getComputedStyle(text).fontSize)).toEqual(['14px', '12px', '12px', '12px', ...(membersOnly ? ['12px'] : [])])
-  await expect(texts.map((text) => getComputedStyle(text).textTransform)).toEqual(texts.map(() => 'none'))
+  await expect(texts.map((text) => getComputedStyle(text).textTransform)).toEqual(texts.map((text) => (soldOut && text === spaces ? 'uppercase' : 'none')))
+  await expect(texts.map((text) => getComputedStyle(text).fontWeight)).toEqual(texts.map((text) => (soldOut && text === spaces ? '500' : '400')))
+  await expect(getComputedStyle(price).textDecorationLine).toBe(soldOut ? 'line-through' : 'none')
   const primary = painted(name, 'text-text-primary', 'color')
   const muted = painted(name, 'text-text-muted-primary', 'color')
   await expect(primary).not.toBe(muted)
-  await expect(texts.map((text) => getComputedStyle(text).color)).toEqual([primary, muted, primary, primary, ...(membersOnly ? [primary] : [])])
+  await expect(texts.map((text) => getComputedStyle(text).color)).toEqual([primary, soldOut ? primary : muted, primary, soldOut ? muted : primary, ...(membersOnly ? [primary] : [])])
 }
 
 /**
@@ -107,6 +114,8 @@ export const Default: Story = {
     const { frame, name, spaces, when, price, membersOnly } = partsOf(card)
     await expect([Math.round(box(frame).width), Math.round(box(frame).height)]).toEqual([458, 573])
     await expect(getComputedStyle(frame).borderRadius).toBe('4px')
+    // The picture is in a <picture>, so React writes no preload link for it (W83).
+    await expect(frame.querySelector('img')!.parentElement!.tagName).toBe('PICTURE')
     await expect([name.textContent, spaces.textContent, when.textContent, price.textContent, membersOnly]).toEqual(['Aufguss Session with Henry', '6 Spaces Left', '16:00 - Tuesday 27 October', '£25', undefined])
     await expect([when.tagName, when.getAttribute('datetime')]).toEqual(['TIME', '2026-10-27T16:00:00+00:00'])
     await expectStyles(card)
@@ -191,7 +200,7 @@ const CARD_WIDTHS = [
 /**
  * W78b (Wayne, 26 Nov): from 768px a card left to itself takes the arrangement that fits. At every width a list
  * draws it there, with the longest it has to hold (a long name, "10:00 - Wednesday 10 February", "10 Spaces Left" or
- * "Sold out", a price with pence and "Members Only"), nothing reaches past the card's edge and no line lies over
+ * "Sold Out", a price with pence and "Members Only"), nothing reaches past the card's edge and no line lies over
  * another: the spaces are at the right of the name's line while the two fit on it (Device=desktop), and on a line of
  * their own under the name when they don't (Device=mobile), as at a tablet's 240 (W78a's report, point 2: there the
  * old card's spaces ran 19px past its edge). The mobile card, 183 wide, holds the same words too.
@@ -203,7 +212,7 @@ export const EveryWidth: Story = {
   render: () => (
     <div className="flex flex-col gap-32">
       {CARD_WIDTHS.flatMap(({ wide, card }) =>
-        [SAMPLE_EVENT_CARDS.longest, { ...SAMPLE_EVENT_CARDS.longest, id: 'sold', spaces: 'Sold out' }, { ...SAMPLE_EVENT_CARDS.plain, when: SAMPLE_EVENT_CARDS.longest.when, spaces: '10 Spaces Left' }].map((sample, index) => (
+        [SAMPLE_EVENT_CARDS.longest, { ...SAMPLE_EVENT_CARDS.longest, id: 'sold', spaces: 'Sold Out', soldOut: true }, { ...SAMPLE_EVENT_CARDS.plain, when: SAMPLE_EVENT_CARDS.longest.when, spaces: '10 Spaces Left' }].map((sample, index) => (
           <div key={`${wide}-${index}`} data-window={wide} style={{ width: card }}>
             <EventCard card={sample} />
           </div>
@@ -242,16 +251,43 @@ export const OneSpaceLeft: Story = {
 }
 
 /**
- * A sold-out event keeps its card (WQ17). Figma's card set draws no sold-out state, so the spaces line reads
- * "Sold out" in its place, as the brief says.
+ * Device=desktop, Type=sold out (1896:8636; W83, Wayne 27 Nov): a sold-out event keeps its card (WQ17). "Sold Out"
+ * is where the spaces were, at the card's right on the name's line, in Label 12, Text/Primary; the price is struck
+ * through in Text/Muted Primary. It is still one link to the event.
  */
 export const SoldOut: Story = {
-  name: 'Sold out',
+  name: 'Device=desktop, Type=sold out',
   args: { card: SAMPLE_EVENT_CARDS.soldOut },
-  play: async ({ canvas }) => {
-    await expect(canvas.getByText('Sold out')).toBeVisible()
+  play: async ({ canvas, canvasElement }) => {
+    await fontsIn(canvasElement)
+    const card = cardIn(canvasElement)
+    await expect(card.dataset.type).toBe('sold out')
+    const { spaces, price } = partsOf(card)
+    await expect([spaces.textContent, price.tagName, price.textContent]).toEqual(['Sold Out', 'S', '£25'])
     await expect(canvas.queryByText(/Spaces? Left/)).toBeNull()
     await expect(canvas.getByRole('link').getAttribute('href')).toBe('/events/winter-solstice')
+    await expectStyles(card)
+    await expectDesktopArrangement(card)
+    await expectNothingSpills(card)
+  },
+}
+
+/** Device=mobile, Type=sold out (1896:8646): the 183 card, "Sold Out" 8px under the name, the price struck through. */
+export const MobileSoldOut: Story = {
+  name: 'Device=mobile, Type=sold out',
+  args: { card: SAMPLE_EVENT_CARDS.soldOut, device: 'mobile' },
+  render: (args) => (
+    <div style={{ width: 183 }}>
+      <EventCard {...args} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    await fontsIn(canvasElement)
+    const card = cardIn(canvasElement)
+    await expect([card.dataset.type, partsOf(card).spaces.textContent]).toEqual(['sold out', 'Sold Out'])
+    await expectStyles(card)
+    await expectMobileArrangement(card)
+    await expectNothingSpills(card)
   },
 }
 

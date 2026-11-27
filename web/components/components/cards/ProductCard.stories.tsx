@@ -36,7 +36,9 @@ export const NewIn: Story = {
     await expect(link.getAttribute('href')).toBe('/shop/tee-charcoal')
     await expect(link.textContent).toContain('The Paddock T-Shirt')
     const picture = canvasElement.querySelector('img') as HTMLImageElement
-    const frame = picture.parentElement as HTMLElement
+    // In a <picture>, so React writes no preload link for it (W83).
+    await expect(picture.parentElement!.tagName).toBe('PICTURE')
+    const frame = picture.closest('picture')!.parentElement as HTMLElement
     await expect([Math.round(box(frame).width), Math.round(box(frame).height)]).toEqual([342, 428])
     await expect(getComputedStyle(frame).borderRadius).toBe('4px')
     const tag = canvas.getByText('New In')
@@ -108,7 +110,7 @@ export const Hover: Story = {
     await waitFor(() => expect(getComputedStyle(sizes).opacity).toBe('1'))
     await expect(getComputedStyle(sizes).pointerEvents).toBe('auto')
     await expect(getComputedStyle(sizes).transitionDuration).toContain(`${DURATION_SHORT}s`)
-    const frame = (canvasElement.querySelector('img') as HTMLElement).parentElement as HTMLElement
+    const frame = (canvasElement.querySelector('img') as HTMLElement).closest('picture')!.parentElement as HTMLElement
     await waitFor(() => expect([Math.round(box(sizes).left - box(frame).left), Math.round(box(frame).right - box(sizes).right), Math.round(box(frame).bottom - box(sizes).bottom)]).toEqual([4, 4, 4]))
     // The second picture is in the page now, over the first.
     const second = canvasElement.querySelector('[data-card-hover]') as HTMLImageElement

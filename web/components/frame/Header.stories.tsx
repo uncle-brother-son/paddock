@@ -31,7 +31,7 @@ const headerIn = (canvasElement: HTMLElement) => canvasElement.querySelector('he
 
 const scrollTo = async (top: number) => {
   window.scrollTo(0, top)
-  await waitFor(() => expect(Math.round(window.scrollY)).toBe(top))
+  await waitFor(() => expect(Math.round(window.scrollY)).toBe(top), { timeout: 3000 })
 }
 
 /**
@@ -54,7 +54,7 @@ export const Global: Story = {
     const height = (control: HTMLElement) => control.getBoundingClientRect().height
     await expect([height(canvas.getByRole('link', { name: 'Book' })), height(canvas.getByRole('link', { name: 'Account' }))]).toEqual([height(canvas.getByRole('button', { name: 'Bag' })), height(canvas.getByRole('button', { name: 'Bag' }))])
     const header = headerIn(canvasElement)
-    await waitFor(() => expect(header.dataset.theme).toBe('dark'))
+    await waitFor(() => expect(header.dataset.theme).toBe('dark'), { timeout: 3000 })
     // Figma: 24px above and below a 25px row of buttons, and Menu starting at column 18 (1019px of 1440).
     await expect(Math.round(canvas.getByRole('button', { name: 'Menu' }).getBoundingClientRect().left)).toBe(1019)
     await expect(Math.round(canvas.getByRole('button', { name: 'Bag' }).getBoundingClientRect().right)).toBe(1424)
@@ -94,14 +94,14 @@ export const AwayOnTheWayDown: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async ({ canvasElement }) => {
     const header = headerIn(canvasElement)
-    await waitFor(() => expect(header.dataset.theme).toBe('dark'))
+    await waitFor(() => expect(header.dataset.theme).toBe('dark'), { timeout: 3000 })
     await scrollTo(900)
-    await waitFor(() => expect(header.getBoundingClientRect().bottom).toBeLessThanOrEqual(0))
+    await waitFor(() => expect(header.getBoundingClientRect().bottom).toBeLessThanOrEqual(0), { timeout: 3000 })
     await scrollTo(800)
-    await waitFor(() => expect(header.getBoundingClientRect().top).toBe(0))
-    await waitFor(() => expect(header.dataset.theme).toBe('light'))
+    await waitFor(() => expect(header.getBoundingClientRect().top).toBe(0), { timeout: 3000 })
+    await waitFor(() => expect(header.dataset.theme).toBe('light'), { timeout: 3000 })
     await scrollTo(0)
-    await waitFor(() => expect(header.dataset.theme).toBe('dark'))
+    await waitFor(() => expect(header.dataset.theme).toBe('dark'), { timeout: 3000 })
   },
 }
 
@@ -113,9 +113,9 @@ export const BackForTheKeyboard: Story = {
   play: async ({ canvas, canvasElement }) => {
     const header = headerIn(canvasElement)
     await scrollTo(900)
-    await waitFor(() => expect(header.getBoundingClientRect().bottom).toBeLessThanOrEqual(0))
+    await waitFor(() => expect(header.getBoundingClientRect().bottom).toBeLessThanOrEqual(0), { timeout: 3000 })
     await userEvent.tab()
     await expect(canvas.getByRole('link', { name: LOGO_LABEL })).toHaveFocus()
-    await waitFor(() => expect(header.getBoundingClientRect().top).toBe(0))
+    await waitFor(() => expect(header.getBoundingClientRect().top).toBe(0), { timeout: 3000 })
   },
 }

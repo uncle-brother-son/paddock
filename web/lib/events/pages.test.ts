@@ -139,7 +139,7 @@ describe('the events list (the Upcoming Events module)', () => {
   it("is the Worker's upcoming events that Sanity publishes, soonest first, a sold-out one among them", async () => {
     sanity()
     readShopEvents.mockResolvedValue([onSale({ sanityId: 'not-in-sanity', startsAt: '2026-11-01T10:00:00+00:00' }), onSale({ spacesLeft: 0, state: 'sold_out' })])
-    expect((await readUpcomingEventCards()).map((card) => [card.id, card.href, card.when, card.spaces])).toEqual([['event-1', '/events/solstice-2026', '19:30 - Monday 21 December', 'Sold out']])
+    expect((await readUpcomingEventCards()).map((card) => [card.id, card.href, card.when, card.spaces])).toEqual([['event-1', '/events/solstice-2026', '19:30 - Monday 21 December', 'Sold Out']])
   })
 
   it('no upcoming event: an empty list, which draws nothing', async () => {

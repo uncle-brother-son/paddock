@@ -63,6 +63,19 @@ describe('pictures and videos', () => {
   })
 })
 
+describe('W83: a new document has no empty share picture', () => {
+  // The SEO block's Share Image is a picture, whose own default (Decorative off) would put an empty picture in every
+  // new document's SEO. A document's initial value is laid over its fields' defaults: each type with an SEO block
+  // takes it away again, as a page's thumbnail is (briefs/W83-logs/initial-values-2.txt: Sanity's own resolver).
+  it('every document type with an SEO block starts without one', () => {
+    const withSeo = SCHEMA_FILES.filter((file) => /type: 'seo'/.test(studioFile(`schemaTypes/${file}`)))
+    expect(withSeo).toEqual(['contentPage.ts', 'event.ts', 'giftCardType.ts', 'infoPage.ts', 'product.ts', 'shopSettings.ts', 'siteSettings.ts'])
+    for (const file of withSeo.filter((one) => one !== 'siteSettings.ts')) expect(studioFile(`schemaTypes/${file}`), file).toMatch(/initialValue: (NO_SEO_AT_FIRST|\{ \.\.\.NO_THUMBNAIL_AT_FIRST, \.\.\.NO_SEO_AT_FIRST \}),/)
+    expect(studioFile('schemaTypes/siteSettings.ts')).toContain('initialValue: { defaultSeo: undefined },')
+    expect(studioFile('schemaTypes/objects/seo.ts')).toContain('export const NO_SEO_AT_FIRST = { seo: undefined }')
+  })
+})
+
 describe('links and buttons', () => {
   it('a link goes somewhere, and has the part its destination needs', () => {
     expect(checkLinkSet(undefined)).toBe('Choose where the link goes.')

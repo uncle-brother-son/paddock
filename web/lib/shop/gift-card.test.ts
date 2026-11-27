@@ -17,6 +17,8 @@ import {
   missingLabel,
   priceShown,
   recipientWrong,
+  SHIPPING_TAB,
+  tabsForFormat,
   validityWords,
   type GiftCardAmount,
 } from './gift-card'
@@ -31,6 +33,14 @@ const AMOUNTS: GiftCardAmount[] = [
   { amount: '150.00', label: '£150' },
 ]
 const LIMITS = { lowest: '1.00', highest: '1000.00' }
+
+describe('Shipping & returns on a Physical card only (W83, Wayne 27 Nov)', () => {
+  it('leaves the tab and its link out for Digital and keeps the rest in order', () => {
+    const tabs = [{ id: 'description' }, { id: 'terms' }, { id: SHIPPING_TAB }]
+    expect(tabsForFormat(tabs, 'physical').map((tab) => tab.id)).toEqual(['description', 'terms', 'shipping'])
+    expect(tabsForFormat(tabs, 'digital').map((tab) => tab.id)).toEqual(['description', 'terms'])
+  })
+})
 
 describe('how the gift card is sent (item 1)', () => {
   it.each([

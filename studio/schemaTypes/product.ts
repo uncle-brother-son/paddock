@@ -3,6 +3,7 @@ import { TagIcon } from '@sanity/icons'
 import { checkSlug } from '../lib/checks'
 import { isSlugFree } from '../lib/slugs'
 import { previousSlugs } from './fields/previousSlugs'
+import { NO_SEO_AT_FIRST } from './objects/seo'
 
 // The Worker's Sanity webhook keeps a row for each product: its name, its category's id and the first image of its
 // gallery (web/app/api/sanity/webhook/route.ts). Prices, sizes, stock and fulfilment are set in the staff app.
@@ -11,6 +12,7 @@ export const product = defineType({
   title: 'Product',
   type: 'document',
   icon: TagIcon,
+  initialValue: NO_SEO_AT_FIRST,
   fields: [
     defineField({
       name: 'name',

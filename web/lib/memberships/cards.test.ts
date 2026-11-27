@@ -7,7 +7,7 @@ import { DEFAULT_SECTION_IDS } from '@/lib/modules/section'
 import { reads } from '@/lib/sanity/read'
 import answers from '@/lib/sanity/sample-answers.json'
 import { contentPageSchema, type MembershipCard, type SessionPassCard } from '@/lib/sanity/schemas'
-import { pounds, poundsWithThousands } from '@/lib/shop/money'
+import { pounds } from '@/lib/shop/money'
 import type { ShopPass, ShopPlan } from '@/lib/shop/read'
 
 import { cardPlansLine, checkCardPlans, checkSectionIdUnique, checkSectionLink, sectionIdsOf, type PageModuleValue } from '../../../studio/lib/checks'
@@ -205,9 +205,8 @@ describe('the Session Pass cards the site shows', () => {
 
 describe('prices on the cards', () => {
   it('are written with their thousands marked, and are text from first to last', () => {
-    expect(['45.00', '490.00', '1308.00', '1100.50', '12345.00', '1000000.00'].map(poundsWithThousands)).toEqual(['£45', '£490', '£1,308', '£1,100.50', '£12,345', '£1,000,000'])
-    // Below a thousand it is `pounds`.
-    for (const money of ['0.00', '70.00', '999.99']) expect(poundsWithThousands(money)).toBe(pounds(money))
+    // The site's one money format (W83): `pounds`, which marks thousands everywhere.
+    expect(['45.00', '490.00', '1308.00', '1100.50', '12345.00', '1000000.00'].map(pounds)).toEqual(['£45', '£490', '£1,308', '£1,100.50', '£12,345', '£1,000,000'])
   })
 
   const files = [

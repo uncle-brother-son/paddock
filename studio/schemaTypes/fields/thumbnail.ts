@@ -19,13 +19,13 @@ export const thumbnail = defineField({
  */
 export const NO_THUMBNAIL_AT_FIRST = { thumbnail: undefined }
 
-/** A document preview's picture: the thumbnail's picture or poster. `old` is a thumbnail saved before W82, a plain picture. */
-export const THUMBNAIL_PREVIEW = { thumbnailKind: 'thumbnail.kind', thumbnailImage: 'thumbnail.image', thumbnailPoster: 'thumbnail.poster', thumbnailOld: 'thumbnail' }
+/** A document preview's picture: the thumbnail's picture or poster. (W83: a thumbnail saved before W82 is no longer shown.) */
+export const THUMBNAIL_PREVIEW = { thumbnailKind: 'thumbnail.kind', thumbnailImage: 'thumbnail.image', thumbnailPoster: 'thumbnail.poster' }
 
-type ThumbnailPreview = { thumbnailKind?: string; thumbnailImage?: unknown; thumbnailPoster?: unknown; thumbnailOld?: { _type?: string } }
+type ThumbnailPreview = { thumbnailKind?: string; thumbnailImage?: unknown; thumbnailPoster?: unknown }
 
-export function thumbnailMedia({ thumbnailKind, thumbnailImage, thumbnailPoster, thumbnailOld }: ThumbnailPreview): never {
+export function thumbnailMedia({ thumbnailKind, thumbnailImage, thumbnailPoster }: ThumbnailPreview): never {
   if (thumbnailKind === 'video') return thumbnailPoster as never
   if (thumbnailKind === 'image') return thumbnailImage as never
-  return (thumbnailOld?._type === 'picture' ? thumbnailOld : undefined) as never
+  return undefined as never
 }

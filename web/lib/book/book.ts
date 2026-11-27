@@ -190,8 +190,8 @@ export type BookingSummaryView = {
 
 const groupWords = (group: Pick<GroupPrice, 'from' | 'to'>): string => (group.from === group.to ? `Group price for ${group.to}` : `Group price for ${group.from} to ${group.to}`)
 
-/** Whole pence as money with its pence written: 4300 is "£43.00". Integers only, so nothing is rounded. */
-const penceAsPounds = (pence: number): string => `£${Math.trunc(pence / 100)}.${two(pence % 100)}`
+/** Whole pence as money with its pence written, the site's one way: 4300 is "£43.00", 166050 "£1,660.50". Integers only, so nothing is rounded. */
+const penceAsPounds = (pence: number): string => poundsAndPence(`${Math.trunc(pence / 100)}.${two(pence % 100)}`)
 
 /**
  * "Your booking" for a visitor who isn't signed in: the session, one people line with booking-quote's total (a

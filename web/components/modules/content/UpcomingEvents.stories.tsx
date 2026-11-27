@@ -51,7 +51,7 @@ export const Desktop: Story = {
       '11:00 - Friday 1 January',
       '18:00 - Tuesday 22 June',
     ])
-    await expect(canvas.getByText('Sold out')).toBeVisible()
+    await expect(canvas.getByText('Sold Out')).toBeVisible()
     // Only the first row's pictures load ahead of the rest.
     await expect([...section.querySelectorAll('img')].map((image) => image.loading)).toEqual(['eager', 'eager', 'lazy', 'lazy', 'lazy', 'lazy'])
   },
@@ -102,7 +102,7 @@ const arrangementOf = (card: Element) => {
 
 /** Everything wrong with where a card's words are: a line cut off by the card's edge, or one lying over another. Empty when all is well. */
 const misplacedIn = (card: Element) => {
-  const texts = [...card.querySelectorAll<HTMLElement>('[data-event="name-and-spaces"] > span, time, [data-event="price"] > span')]
+  const texts = [...card.querySelectorAll<HTMLElement>('[data-event="name-and-spaces"] > span, time, [data-event="price"] > span, [data-event="price"] > s')]
   const within = box(card)
   const clipped = texts.filter((text) => box(text).left < within.left - 0.5 || box(text).right > within.right + 0.5 || box(text).bottom > within.bottom + 0.5).map((text) => `clipped: ${text.textContent}`)
   const line = card.querySelector('[data-event="name-and-spaces"]') as HTMLElement
@@ -135,7 +135,7 @@ const atWidth = (viewport: string, wide: number, card: number, expected: string[
     // The rule itself, from the words' own widths.
     const fits = (one: Element) => onOneLine(nameOf(one)) + 8 + box(spacesOf(one)).width <= box(one).width + 0.5
     await expect(cards.map(arrangementOf)).toEqual(cards.map((one) => (wide < 768 || fits(one) ? 'desktop' : 'mobile')))
-    await expect(cards.map((one) => (one as HTMLElement).dataset.type)).toEqual(['members only', 'default', 'members only', 'default'])
+    await expect(cards.map((one) => (one as HTMLElement).dataset.type)).toEqual(['members only', 'default', 'members only', 'sold out'])
     await expect(document.documentElement.scrollWidth).toBe(wide)
   },
 })

@@ -4,6 +4,7 @@ import { expect, userEvent, waitFor, within } from 'storybook/test'
 
 import { Button } from '@/components/ui/buttons/Button'
 import { OverlayTexture } from '@/components/ui/media/Overlay'
+import { painted } from '@/components/ui/story-kit'
 
 import { BookingPanel } from './BookingPanel'
 import { SAMPLE_ADD_ONS, SAMPLE_TODAY, sampleNoSessions, sampleReads, sampleSessionsWithFull } from './sample-book'
@@ -142,6 +143,9 @@ export const PrivateSixty: Story = {
     for (let people = 8; people <= 10; people += 1) await userEvent.click(more)
     await expect(wordsOf(rows[1]!).slice(4)).toEqual(['£165', '10 People'])
     await expect(more).toBeDisabled()
+    // At the most the plus is faded, Text/Muted Primary as IconButton's disabled state (W83, Wayne 27 Nov).
+    const muted = painted(more, 'text-text-muted-primary', 'color')
+    await waitFor(() => expect(getComputedStyle(more).color).toBe(muted))
   },
 }
 

@@ -108,7 +108,7 @@ const fitsAt =
     await userEvent.click(within(panel.getByRole('region', { name: 'Add ons' })).getByRole('button', { name: 'One more' }))
     await userEvent.click(panel.getByRole('button', { name: 'Add Cold Brew Coffee with Oat Milk and Vanilla Syrup, Large' }))
     // Ten people at £165, two towel hires at £3 and a coffee at £4.50.
-    await expect(within(summary).getByText('£1660.50')).toBeVisible()
+    await expect(within(summary).getByText('£1,660.50')).toBeVisible()
     look('add-ons, two chosen')
 
     await expect(wrong).toEqual({})

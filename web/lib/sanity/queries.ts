@@ -56,12 +56,9 @@ const galleryAt = (field: string): string => `coalesce(${field}[]{"item": ${MEDI
 
 /**
  * W82 (WQ90): a content page's or an info page's thumbnail, the media block: a picture, or a video with its poster
- * (null with no file). A thumbnail saved before W82 is a plain picture (one live page has one until the lead turns it
- * into a media block): it is read as a picture. A media block never has an asset of its own, so only that old shape
- * takes the first line. Remove the first line in the tidy-up.
+ * (null with no file). The shape saved before W82, a plain picture, is no longer read (W83: no document holds it).
  */
 const thumbnailAt = (field: string): string => `select(
-  defined(${field}.asset._ref) => {"kind": "image", "image": ${field}${PICTURE}},
   defined(${field}) => ${field}{"item": ${MEDIA}}.item,
   null
 )`
@@ -120,9 +117,9 @@ const MODULE_BUTTON = `{text, "link": link${LINK}}`
 
 const moduleButtonAt = (field: string): string => `select(defined(${field}.text) && defined(${field}.link.destination) => ${field}${MODULE_BUTTON}, null)`
 
-/** The kinds of module the site draws. `hero` is HeroMedia's old name (W79). */
+/** The kinds of module the site draws. */
 const MODULE_TYPES =
-  '["hero", "heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer", "memberships", "sessionPasses"]'
+  '["heroMedia", "upcomingEvents", "pageHeader", "galleryCarousel", "accordionList", "textMediaSticky", "textBlock", "sectionSpacer", "memberships", "sessionPasses"]'
 
 /**
  * W73b: a page's modules, top to bottom, each with the fields of its own kind. A kind the site doesn't know is left
@@ -130,9 +127,8 @@ const MODULE_TYPES =
  * editor adds one) and its button, which is there only when it is switched on and has words. A button with no link
  * opens the booking panel.
  *
- * W79 (WQ79): the module's Sanity type was `hero` until W79 and is `heroMedia` now. A module still saved as `hero`
- * (Home's, until the lead moves it after the Studio is deployed) is read as `heroMedia`, so the live site never
- * loses its hero. Remove `"hero"` from both lists and the `select` in the tidy-up.
+ * W79 (WQ79): the module's Sanity type was `hero` until W79 and is `heroMedia` now; W83 dropped the old name (no
+ * document holds it).
  *
  * W80: the content modules (PageHeader, GalleryCarousel, AccordionList, TextMediaSticky, TextBlock, SectionSpacer),
  * and on every module its section's theme (WQ81: null is Light, the page's own; any word but the four is null) and
@@ -143,7 +139,7 @@ const MODULE_TYPES =
  * its cards; the cards themselves are the Membership and Session Pass documents (the two queries after the pages').
  */
 const MODULES = `coalesce(modules[_type in ${MODULE_TYPES}]{
-  "type": select(_type == "hero" => "heroMedia", _type),
+  "type": _type,
   "key": _key,
   "theme": select(theme in ["light", "dark", "fjord", "mud"] => theme, null),
   "sectionId": sectionId,
@@ -175,7 +171,7 @@ const MODULES = `coalesce(modules[_type in ${MODULE_TYPES}]{
     "button": ${moduleButtonAt('button')},
     "align": select(alignment in ["center", "right"] => alignment, "left")
   },
-  _type in ["hero", "heroMedia"] => {
+  _type == "heroMedia" => {
     "media": select(defined(media) => media{"item": ${MEDIA}}.item, null),
     "button": select(
       showButton == true && defined(buttonText) => {

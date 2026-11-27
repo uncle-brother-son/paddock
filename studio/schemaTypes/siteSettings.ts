@@ -17,6 +17,8 @@ export const siteSettings = defineType({
   title: 'Site Settings',
   type: 'document',
   icon: CogIcon,
+  // W83: no empty share picture at first (objects/seo.ts, NO_SEO_AT_FIRST); here the field is Default SEO.
+  initialValue: { defaultSeo: undefined },
   groups: [
     { name: 'site', title: 'Site', default: true },
     { name: 'pages', title: 'Pages' },

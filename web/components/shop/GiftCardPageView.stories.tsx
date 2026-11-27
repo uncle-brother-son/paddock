@@ -25,6 +25,16 @@ type Story = StoryObj<typeof meta>
 
 const box = (element: Element) => element.getBoundingClientRect()
 const part = (canvasElement: HTMLElement, name: string) => canvasElement.querySelector(`[data-shop="${name}"]`) as HTMLElement
+
+/**
+ * The details' own fonts are in before anything is measured (W83): in a full run the first story can start before
+ * they are, and a line of capitals is a pixel shorter in a stand-in font.
+ */
+const fontsIn = async (canvasElement: HTMLElement) => {
+  await document.fonts.ready
+  const fonts = [...new Set([...part(canvasElement, 'details').querySelectorAll('*')].map((element) => getComputedStyle(element).font))]
+  await waitFor(() => expect(fonts.filter((font) => !document.fonts.check(font))).toEqual([]), { timeout: 3000 })
+}
 const gap = (above: Element, below: Element) => Math.round(box(below).top - box(above).bottom)
 /** The chip drawn for a radio button: the label round it. */
 const chipOf = (radio: HTMLElement) => radio.parentElement as HTMLElement
@@ -35,11 +45,13 @@ const fieldError = (field: HTMLElement) => field.closest('[data-field]')?.queryS
  * column, the Digital card's pictures stacked, each 4 by 5; the details (Figma "ProductInfoContainer", Type=gift card digital) are
  * columns 15 to 21, 240px down, and stick to the window's top. In them: the name in H2, the price line (the amount
  * chosen), the Digital / Physical switch, the amounts with the lowest chosen, "Sending to someone else?", the
- * button with "Your gift card will be sent by email" under it, and the three links that open the info panel.
+ * button with "Your gift card will be sent by email" under it, and the links that open the info panel: Description and
+ * Gift Card Terms & Conditions (Shipping & returns is for a Physical card only: W83, Wayne 27 Nov).
  */
 export const Digital: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },
   play: async ({ canvas, canvasElement }) => {
+    await fontsIn(canvasElement)
     const gallery = part(canvasElement, 'gallery')
     await expect([Math.round(box(gallery).left), Math.round(box(gallery).width)]).toEqual([0, 716])
     const pictures = [...gallery.querySelectorAll('[data-gallery-item]')]
@@ -60,11 +72,16 @@ export const Digital: Story = {
     const [digital, physical] = within(formats).getAllByRole('radio')
     await expect([digital!.parentElement!.textContent, digital, physical!.parentElement!.textContent]).toEqual(['Digital', digital, 'Physical'])
     await expect(digital).toBeChecked()
-    // 12px above and below its label (Figma: 33 tall; Label 12's capitals measure 8px here, 9 in Figma).
-    await expect([Math.round(box(formats).left), gap(price, formats), Math.round(box(formats).height)]).toEqual([842, 32, 32])
+    // 12px above and below its label (Figma: 33 tall). With the site's fonts in, Label 12's capitals measure 8.5px (W83: the 32 this
+    // story once asked for was a stand-in font's, which is why it failed now and then in a full run).
+    await expect([Math.round(box(formats).left), gap(price, formats), Math.round(box(formats).height)]).toEqual([842, 32, 33])
     await expect(Math.round(box(formats).width)).toBeLessThan(405)
     const button = canvas.getByRole('button', { name: 'Add to bag' })
-    await expect(getComputedStyle(chipOf(digital!)).backgroundColor).toBe(getComputedStyle(button).backgroundColor)
+    // The chosen option is drawn in the button's colour: by its own chip until the Toggle has measured it, then by the
+    // part that slides under it (W83: in a full run the fonts can arrive after that change, so look at whichever draws it).
+    const chosenFill = () => (formats.querySelector<HTMLElement>('[data-toggle-selected]') ?? chipOf(digital!))
+    await waitFor(() => expect(getComputedStyle(chosenFill()).backgroundColor).toBe(getComputedStyle(button).backgroundColor), { timeout: 3000 })
+    await expect(Math.round(box(chosenFill()).left)).toBe(Math.round(box(chipOf(digital!)).left))
     // Amount: a chip for each preset and Other, three to a row, 4px apart, across the details' width; £15 chosen.
     const amount = part(canvasElement, 'amount')
     await expect(gap(formats, amount)).toBe(32)
@@ -86,8 +103,9 @@ export const Digital: Story = {
     const line = part(canvasElement, 'fulfilment')
     await expect([line.textContent, gap(button, line)]).toEqual(['Your gift card will be sent by email', 24])
     // The links that open the info panel, in Label 12, 64px under the rest.
-    const links = ['Description', 'Gift Card Terms & Conditions', 'Shipping & returns'].map((label) => canvas.getByRole('button', { name: label }))
-    await expect(links.map((link) => link.getAttribute('aria-haspopup'))).toEqual(['dialog', 'dialog', 'dialog'])
+    const links = ['Description', 'Gift Card Terms & Conditions'].map((label) => canvas.getByRole('button', { name: label }))
+    await expect(links.map((link) => link.getAttribute('aria-haspopup'))).toEqual(['dialog', 'dialog'])
+    await expect(canvas.queryByRole('button', { name: 'Shipping & returns' })).toBeNull()
     await expect(gap(line, links[0]!)).toBe(64)
     // No row follows the details: the frames draw none.
     await expect(part(canvasElement, 'similar')).toBeNull()
@@ -97,7 +115,7 @@ export const Digital: Story = {
 /**
  * Figma "Gift card physical" (1684:41977), which the address asks for with ?format=physical: the Physical card's
  * own pictures, Physical chosen on the switch, no "Sending to someone else?", and "Delivery or collection from the
- * Paddock." under the button.
+ * Paddock." under the button. Its links include Shipping & returns (Physical only: W83, Wayne 27 Nov).
  */
 export const Physical: Story = {
   globals: { viewport: { value: 'desktop', isRotated: false } },
@@ -136,6 +154,9 @@ export const Switching: Story = {
     await expect(canvas.getByRole('radio', { name: '£60' })).toBeChecked()
     await expect(part(canvasElement, 'price').textContent).toBe('£60')
     await expect(canvas.queryByRole('checkbox')).toBeNull()
+    // Physical has the Shipping & returns link and tab; Digital has neither (W83, Wayne 27 Nov).
+    await expect(canvas.getByRole('button', { name: 'Shipping & returns' })).toBeVisible()
+    await expect(canvas.getAllByRole('tab', { hidden: true }).map((tab) => tab.textContent)).toEqual(['Description', 'Gift Card Terms & Conditions', 'Shipping & returns'])
     // The arrow keys move between the two, as on any pair of radio buttons.
     await userEvent.keyboard('{ArrowLeft}')
     await expect(canvas.getByRole('radio', { name: 'Digital' })).toBeChecked()
@@ -145,6 +166,8 @@ export const Switching: Story = {
     await expect(canvas.getByRole('radio', { name: '£60' })).toBeChecked()
     await expect(canvas.getByRole('checkbox', { name: 'Sending to someone else?' })).toBeChecked()
     await expect(canvas.getByRole('textbox', { name: 'Recipient’s Name' })).toHaveValue('Sam')
+    await expect(canvas.queryByRole('button', { name: 'Shipping & returns' })).toBeNull()
+    await expect(canvas.getAllByRole('tab', { hidden: true }).map((tab) => tab.textContent)).toEqual(['Description', 'Gift Card Terms & Conditions'])
   },
 }
 
@@ -213,7 +236,7 @@ export const OtherChosen: Story = {
     // "1,000" is the most it takes, and reads as it is written in the words.
     await userEvent.clear(field)
     await userEvent.type(field, '1,000')
-    await expect(part(canvasElement, 'price').textContent).toBe('£1000')
+    await expect(part(canvasElement, 'price').textContent).toBe('£1,000')
     await userEvent.click(button)
     await expect(fieldError(field)).toBeNull()
     // A preset chosen again closes the field; Other again remembers what was typed.
@@ -364,11 +387,13 @@ export const NoOther: Story = {
 
 /**
  * The info panel, on Gift Card Terms & Conditions: Sanity's terms with {validity} filled from the staff app's
- * setting ("6 months"). The panel is the Product page's, sliding in from the right with its Close label.
+ * setting ("6 months"). The panel is the Product page's, sliding in from the right with its Close label. On a
+ * Physical card, so all three tabs are there.
  */
 export const Terms: Story = {
   name: 'Gift Card Terms & Conditions',
   globals: { viewport: { value: 'desktop', isRotated: false } },
+  args: { format: 'physical' },
   play: async ({ canvas }) => {
     await userEvent.click(canvas.getByRole('button', { name: 'Gift Card Terms & Conditions' }))
     const panel = await canvas.findByRole('dialog', { name: 'Gift card information' })
@@ -382,11 +407,11 @@ export const Terms: Story = {
   },
 }
 
-/** With no Shipping & Returns summary in Shop settings that link and tab are not drawn, as on the Product page. */
+/** With no Shipping & Returns summary in Shop settings that link and tab are not drawn, as on the Product page: even on a Physical card. */
 export const NoShippingSummary: Story = {
   name: 'No Shipping & Returns summary',
   globals: { viewport: { value: 'desktop', isRotated: false } },
-  args: { view: { ...SAMPLE_GIFT_CARD, shipping: [] } },
+  args: { view: { ...SAMPLE_GIFT_CARD, shipping: [] }, format: 'physical' },
   play: async ({ canvas }) => {
     await expect(canvas.queryByRole('button', { name: 'Shipping & returns' })).toBeNull()
     await expect(canvas.getAllByRole('tab', { hidden: true })).toHaveLength(2)

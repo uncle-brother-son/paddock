@@ -1,5 +1,6 @@
 import { defineArrayMember, defineField, defineType } from 'sanity'
 import { BasketIcon } from '@sanity/icons'
+import { NO_SEO_AT_FIRST } from './objects/seo'
 
 // One document (WQ6).
 export const shopSettings = defineType({
@@ -7,6 +8,7 @@ export const shopSettings = defineType({
   title: 'Shop Settings',
   type: 'document',
   icon: BasketIcon,
+  initialValue: NO_SEO_AT_FIRST,
   fields: [
     defineField({
       name: 'title',

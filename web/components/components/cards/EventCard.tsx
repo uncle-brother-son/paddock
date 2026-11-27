@@ -19,10 +19,12 @@ type EventCardProps = {
 /**
  * Figma "EventCard" (04 Components, 329:7587; W78b, WQ77: Wayne's updated card): the picture, 4 by 5 with 4px corners
  * on Object/Product BG; beneath it, 8px apart, three lines:
- * - the name in Copy 14 with the spaces left in Copy 12, Text/Muted Primary. A sold-out event keeps its card, with
- *   "Sold out" where the spaces were (WQ17);
+ * - the name in Copy 14 with the spaces left in Copy 12, Text/Muted Primary;
  * - the date and time in Copy 12 (WQ69: the site's one form, "16:00 - Tuesday 27 October");
  * - the price in Copy 12, and on Type=members only (an event only a member can book now) "Members Only" 8px after it.
+ *
+ * A sold-out event keeps its card (WQ17) as Figma's Type=sold out (W83, Wayne 27 Nov; 1896:8636, 1896:8646): "Sold
+ * Out" where the spaces were, in Label 12, Text/Primary, and the price struck through in Text/Muted Primary.
  *
  * Its two arrangements are Figma's Device, and differ in the first line only. Device=desktop (329:7588, 1802:11329):
  * the spaces are on the name's line, at the card's right; the name has the rest of the line and goes on to a second
@@ -47,22 +49,26 @@ export function EventCard({ card, device, sizes = EVENT_CARD_SIZES, priority = f
   // that is what sends the spaces to a line of their own when the two don't fit.
   const name = device === 'mobile' ? '' : device === 'desktop' ? 'min-w-0 flex-1' : 'min-w-0 flex-1 md:flex-auto'
   return (
-    <article data-event="card" data-device={device ?? 'by fit'} data-type={card.membersOnly ? 'members only' : 'default'} className={className}>
+    <article data-event="card" data-device={device ?? 'by fit'} data-type={card.soldOut ? 'sold out' : card.membersOnly ? 'members only' : 'default'} className={className}>
       <SiteLink href={card.href} className="flex flex-col gap-8">
         <div className="relative aspect-4/5 w-full overflow-clip rounded-s bg-object-product-bg">
           {picture ? (
-            // eslint-disable-next-line @next/next/no-img-element -- Next's image optimiser does not run on Workers: the address is Sanity's CDN, sized in lib/sanity/image.ts.
-            <img
-              src={picture.src}
-              srcSet={picture.srcSet}
-              sizes={sizes}
-              width={picture.width}
-              height={picture.height}
-              alt={picture.alt}
-              loading={priority ? 'eager' : 'lazy'}
-              decoding="async"
-              className="absolute inset-0 size-full object-cover"
-            />
+            // In a <picture> so React writes no preload link for it (W83), as a ProductCard's.
+            <picture>
+              {/* A plain <img>: Next's image optimiser does not run on Workers. The address is Sanity's CDN, sized in lib/sanity/image.ts. */}
+              <img
+                src={picture.src}
+                srcSet={picture.srcSet}
+                sizes={sizes}
+                width={picture.width}
+                height={picture.height}
+                alt={picture.alt}
+                loading={priority ? 'eager' : 'lazy'}
+                fetchPriority={priority ? 'high' : 'auto'}
+                decoding="async"
+                className="absolute inset-0 size-full object-cover"
+              />
+            </picture>
           ) : null}
         </div>
         <div className="flex flex-col gap-8">
@@ -70,7 +76,9 @@ export function EventCard({ card, device, sizes = EVENT_CARD_SIZES, priority = f
               another line beside them (a word longer than the line breaks). Mobile: one under the other, 8px apart. */}
           <p data-event="name-and-spaces" className={`flex items-start gap-8 ${line}`}>
             <span className={`text-copy-14 [overflow-wrap:anywhere] text-text-primary ${name}`}>{card.name}</span>
-            <span className="shrink-0 text-copy-12 whitespace-nowrap text-text-muted-primary">{card.spaces}</span>
+            <span data-event="spaces" className={`shrink-0 whitespace-nowrap ${card.soldOut ? 'text-label-12 text-text-primary' : 'text-copy-12 text-text-muted-primary'}`}>
+              {card.spaces}
+            </span>
           </p>
           <p className="flex">
             <time dateTime={card.startsAt} className="text-copy-12 text-text-primary">
@@ -79,7 +87,11 @@ export function EventCard({ card, device, sizes = EVENT_CARD_SIZES, priority = f
           </p>
           {card.price !== null || card.membersOnly ? (
             <p data-event="price" className="flex flex-wrap items-start gap-8">
-              {card.price !== null ? <span className="text-copy-12 whitespace-nowrap text-text-primary">{card.price}</span> : null}
+              {card.price === null ? null : card.soldOut ? (
+                <s className="text-copy-12 whitespace-nowrap text-text-muted-primary">{card.price}</s>
+              ) : (
+                <span className="text-copy-12 whitespace-nowrap text-text-primary">{card.price}</span>
+              )}
               {card.membersOnly ? <span className="text-copy-12 whitespace-nowrap text-text-primary">{CARD_MEMBERS_ONLY}</span> : null}
             </p>
           ) : null}

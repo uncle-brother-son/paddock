@@ -1,6 +1,7 @@
 import { defineArrayMember, defineType, defineField } from 'sanity'
 import { Gift } from 'lucide-react'
 import { checkValidityPlaceholder } from '../lib/checks'
+import { NO_SEO_AT_FIRST } from './objects/seo'
 
 // The one gift card, at /shop/gift-card (WQ19): its address is the site's own, so it has no slug. The Worker's Sanity
 // webhook keeps its name and one picture: the first image of the Physical gallery, or of the Digital one when the
@@ -10,6 +11,7 @@ export const giftCardType = defineType({
   title: 'Gift Card',
   type: 'document',
   icon: Gift,
+  initialValue: NO_SEO_AT_FIRST,
   fields: [
     defineField({
       name: 'name',

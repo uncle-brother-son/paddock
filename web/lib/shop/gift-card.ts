@@ -25,6 +25,15 @@ export const FORMAT_LINES: Record<GiftCardFormat, string> = {
   physical: 'Delivery or collection from the Paddock.',
 }
 
+/** The info panel's Shipping & returns tab: its id, beside Description and Gift Card Terms & Conditions. */
+export const SHIPPING_TAB = 'shipping'
+
+/**
+ * The info panel's tabs for the format chosen (W83, Wayne 27 Nov): Shipping & returns, and its link, only for a
+ * Physical card. A Digital one is sent by email, so it has nothing to ship or send back.
+ */
+export const tabsForFormat = <Tab extends { id: string }>(tabs: Tab[], format: GiftCardFormat): Tab[] => (format === 'physical' ? tabs : tabs.filter((tab) => tab.id !== SHIPPING_TAB))
+
 /** What the address carries the format under: ?format=physical. */
 export const FORMAT_PARAM = 'format'
 

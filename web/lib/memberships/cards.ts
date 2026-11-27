@@ -1,6 +1,6 @@
 import type { SectionSettings } from '@/lib/modules/section'
 import type { MembershipCard, RichText, SessionPassCard } from '@/lib/sanity/schemas'
-import { poundsWithThousands } from '@/lib/shop/money'
+import { pounds } from '@/lib/shop/money'
 import type { ShopLevel, ShopPass, ShopPlan } from '@/lib/shop/read'
 
 // W81 (WQ84-WQ86): what the Memberships and SessionPasses modules show, made from Sanity's cards (their names, lines
@@ -63,8 +63,8 @@ export function membershipCards({ cards, plans }: { cards: readonly MembershipCa
       const id = level === 'core' ? card.corePlan : card.allAccessPlan
       const plan = id === null ? undefined : onSale.get(id)
       if (!plan || plan.level !== SHOP_LEVEL[level]) return []
-      const monthly = plan.priceMonthly === null ? null : { price: poundsWithThousands(plan.priceMonthly), before: null }
-      const yearly = plan.priceYearly === null ? null : { price: poundsWithThousands(plan.priceYearly), before: plan.yearlyBefore === null ? null : poundsWithThousands(plan.yearlyBefore) }
+      const monthly = plan.priceMonthly === null ? null : { price: pounds(plan.priceMonthly), before: null }
+      const yearly = plan.priceYearly === null ? null : { price: pounds(plan.priceYearly), before: plan.yearlyBefore === null ? null : pounds(plan.yearlyBefore) }
       return [{ level, plan: plan.sanityId, ...OFFER_WORDS[level], prices: { monthly, yearly } }]
     })
     if (offers.length === 0) return []
@@ -124,7 +124,7 @@ export function passCards({ cards, passes }: { cards: readonly SessionPassCard[]
       const id = level === 'core' ? card.corePass : card.allAccessPass
       const pass = id === null ? undefined : onSale.get(id)
       if (!pass || pass.level !== SHOP_LEVEL[level]) return []
-      return [{ level, pass: pass.sanityId, ...OFFER_WORDS[level], price: poundsWithThousands(pass.price), validFor: validForLine(pass.expiryMonths) }]
+      return [{ level, pass: pass.sanityId, ...OFFER_WORDS[level], price: pounds(pass.price), validFor: validForLine(pass.expiryMonths) }]
     })
     return offers.length === 0 ? [] : [{ id: card.id, name: card.name.trim(), line: words(card.line), offers }]
   })

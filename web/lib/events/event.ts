@@ -8,7 +8,7 @@ import type { ShopEvent } from '@/lib/shop/read'
 
 import { whenLine } from '@/lib/dates'
 
-import { cardSpaces } from './format'
+import { cardSoldOut, cardSpaces } from './format'
 
 // W75: what an Event page and an EventCard show (Figma 1684:41950, 1684:42018, 329:7587), made from Sanity's event
 // (name, words, pictures) and the Worker's (W75a: date, spaces, state, prices). Nothing here reads either, and every
@@ -90,10 +90,12 @@ export type EventCardView = {
   picture: CardPicture | null
   when: string
   startsAt: string
-  /** "6 Spaces Left", "1 Space Left", or "Sold out". */
+  /** "6 Spaces Left", "1 Space Left", or "Sold Out". */
   spaces: string
   /** "£25": what a visitor pays for a place, or on a members only card what a member pays; null when the Worker gives none. */
   price: string | null
+  /** Figma's Type=sold out (W83): no space left. "Sold Out" is drawn in Label 12 and the price struck through. */
+  soldOut: boolean
   /** Figma's Type=members only: an event only a member can book now (members only, or members first before it opens to everyone). */
   membersOnly: boolean
 }
@@ -117,6 +119,7 @@ export function eventCard(content: SanityEventCard, event: Pick<ShopEvent, 'star
     startsAt: event.startsAt,
     spaces: cardSpaces(event.spacesLeft),
     price: price.now,
+    soldOut: cardSoldOut(event.spacesLeft),
     membersOnly: price.memberOnly,
   }
 }

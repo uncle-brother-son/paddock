@@ -3,6 +3,7 @@ import { CalendarIcon } from '@sanity/icons'
 import { checkSlug } from '../lib/checks'
 import { isSlugFree } from '../lib/slugs'
 import { previousSlugs } from './fields/previousSlugs'
+import { NO_SEO_AT_FIRST } from './objects/seo'
 
 // Event content. Syncs name, the first image of its gallery, and whether there is an extra waiver (plus a version
 // fingerprint of its text) to the booking system via the webhook. Date and time, capacity, who can
@@ -12,6 +13,7 @@ export const event = defineType({
   title: 'Event',
   type: 'document',
   icon: CalendarIcon,
+  initialValue: NO_SEO_AT_FIRST,
   fields: [
     defineField({
       name: 'name',

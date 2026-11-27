@@ -43,18 +43,23 @@ export function ProductCard({ card, sizes = LISTING_CARD_SIZES, priority = false
       <SiteLink href={card.href} className="flex flex-col gap-8">
         <div className="relative aspect-4/5 w-full overflow-clip rounded-s bg-object-product-bg">
           {picture ? (
-            // eslint-disable-next-line @next/next/no-img-element -- Next's image optimiser does not run on Workers: the address is Sanity's CDN, sized in lib/sanity/image.ts.
-            <img
-              src={picture.src}
-              srcSet={picture.srcSet}
-              sizes={sizes}
-              width={picture.width}
-              height={picture.height}
-              alt={picture.alt}
-              loading={priority ? 'eager' : 'lazy'}
-              decoding="async"
-              className="absolute inset-0 size-full object-cover"
-            />
+            // In a <picture> so React writes no preload link for it (W83): a first-row picture still loads at once, and
+            // first (eager, high priority), but a preload picked for one window size is never left unused at another.
+            <picture>
+              {/* A plain <img>: Next's image optimiser does not run on Workers. The address is Sanity's CDN, sized in lib/sanity/image.ts. */}
+              <img
+                src={picture.src}
+                srcSet={picture.srcSet}
+                sizes={sizes}
+                width={picture.width}
+                height={picture.height}
+                alt={picture.alt}
+                loading={priority ? 'eager' : 'lazy'}
+                fetchPriority={priority ? 'high' : 'auto'}
+                decoding="async"
+                className="absolute inset-0 size-full object-cover"
+              />
+            </picture>
           ) : null}
           {hoverPicture && met ? (
             // eslint-disable-next-line @next/next/no-img-element -- as above.

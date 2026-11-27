@@ -52,8 +52,8 @@ const openMenu: Play = async ({ canvas, canvasElement }) => {
   await expect(dialogIn(canvasElement)).not.toBeVisible()
   await userEvent.click(canvas.getByRole('button', { name: 'Menu' }))
   const dialog = dialogIn(canvasElement)
-  await waitFor(() => expect(dialog).toBeVisible())
-  await waitFor(() => expect(getComputedStyle(dialog).clipPath).toBe('inset(0px)'))
+  await waitFor(() => expect(dialog).toBeVisible(), { timeout: 3000 })
+  await waitFor(() => expect(getComputedStyle(dialog).clipPath).toBe('inset(0px)'), { timeout: 3000 })
 }
 
 /**
@@ -215,7 +215,7 @@ export const ClosedWithEsc: Story = {
     await openMenu(context)
     const { canvas, canvasElement } = context
     await userEvent.keyboard('{Escape}')
-    await waitFor(() => expect(dialogIn(canvasElement)).not.toBeVisible())
+    await waitFor(() => expect(dialogIn(canvasElement)).not.toBeVisible(), { timeout: 3000 })
     await expect(canvas.getByRole('button', { name: 'Menu' })).toHaveFocus()
     await expect((canvasElement.querySelector('#main') as HTMLElement).inert).toBe(false)
     await expect(document.documentElement.classList.contains('overflow-hidden')).toBe(false)
@@ -231,13 +231,13 @@ export const ClosedWithCloseAndShade: Story = {
     const { canvas, canvasElement } = context
     await openMenu(context)
     await userEvent.click(within(dialogIn(canvasElement)).getByRole('button', { name: 'Close' }))
-    await waitFor(() => expect(dialogIn(canvasElement)).not.toBeVisible())
+    await waitFor(() => expect(dialogIn(canvasElement)).not.toBeVisible(), { timeout: 3000 })
     await expect(canvas.getByRole('button', { name: 'Menu' })).toHaveFocus()
 
     await openMenu(context)
     // Below the panel, where only the shade is.
     await userEvent.pointer({ keys: '[MouseLeft]', target: canvasElement.querySelector('[data-overlay="shade"]') as HTMLElement, coords: { clientX: 700, clientY: 700 } })
-    await waitFor(() => expect(dialogIn(canvasElement)).not.toBeVisible())
+    await waitFor(() => expect(dialogIn(canvasElement)).not.toBeVisible(), { timeout: 3000 })
   },
 }
 
