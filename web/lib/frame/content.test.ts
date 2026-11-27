@@ -33,11 +33,13 @@ describe('the menu', () => {
       ['Solstice', '/events/solstice-2026', false],
       ['The Experience', '/the-experience', false],
       ['Manage Cookies', '/info/manage-cookies', false],
+      ['Gift Cards', '/shop/gift-card', false],
     ])
   })
 
-  it("the hover picture is the linked page's thumbnail, cropped 4 by 5 from Sanity's CDN; a page with none, the shop and an event have none", () => {
-    expect(menuLinks.map((link) => link.thumbnail !== null)).toEqual([false, true, false, false, true, false])
+  it("the hover picture is the linked page's thumbnail, cropped 4 by 5 from Sanity's CDN; a page with none and an event have none", () => {
+    // W84: the shop (third) and the gift card (last) have thumbnails of their own, below.
+    expect(menuLinks.map((link) => link.thumbnail !== null)).toEqual([false, true, true, false, true, false, true])
     expect(menuLinks[1]!.thumbnail!.videoUrl).toBeNull()
     const thumbnail = menuLinks[1]!.thumbnail!.picture
     expect([thumbnail.width, thumbnail.height]).toEqual([240, 300])
@@ -55,6 +57,41 @@ describe('the menu', () => {
     expect(thumbnail.picture.src).toMatch(/^https:\/\/cdn\.sanity\.io\/images\/project\/production\/tall-900x1600\.jpg\?/)
     // A 900 by 1600 poster cut 4 by 5 (900 by 1125) round its hotspot, 40% of the way down: from 78px.
     for (const part of ['rect=0,78,900,1125', 'w=240', 'h=300', 'fit=crop', 'auto=format']) expect(thumbnail.picture.src).toContain(part)
+  })
+
+  it("W84 (WQ92): a link to the shop shows Shop Settings' Thumbnail, drawn as a page's is", () => {
+    const thumbnail = menuLinks[2]!.thumbnail!
+    expect(menuLinks[2]!.href).toBe('/shop')
+    expect(thumbnail.videoUrl).toBeNull()
+    expect([thumbnail.picture.width, thumbnail.picture.height]).toEqual([240, 300])
+    expect(thumbnail.picture.src).toMatch(/^https:\/\/cdn\.sanity\.io\/images\/project\/production\/hero-1600x900\.jpg\?/)
+    // A 1600 by 900 picture with a quarter cropped off its left, cut 4 by 5 (720 by 900) inside the crop, round the
+    // middle of the whole picture, where Sanity's builder takes the hotspot to be when the editor set none: from 440px.
+    for (const part of ['rect=440,0,720,900', 'w=240', 'h=300', 'fit=crop', 'auto=format']) expect(thumbnail.picture.src).toContain(part)
+    expect(thumbnail.picture.srcSet.split(', ').map((entry) => entry.split(' ')[1])).toEqual(['240w', '480w', '720w'])
+  })
+
+  it("W84 (WQ92): a link to the gift card shows the gift card's Menu Thumbnail, a video here, never a picture of its galleries", () => {
+    const thumbnail = menuLinks[6]!.thumbnail!
+    expect(menuLinks[6]!.href).toBe('/shop/gift-card')
+    expect(thumbnail.videoUrl).toBe('https://cdn.sanity.io/files/p/d/vid.mp4')
+    // Its poster (the tall picture), as a page's video thumbnail; the galleries' pictures are thumb and hero.
+    expect(thumbnail.picture.src).toMatch(/^https:\/\/cdn\.sanity\.io\/images\/project\/production\/tall-900x1600\.jpg\?/)
+    for (const part of ['rect=0,78,900,1125', 'w=240', 'h=300']) expect(thumbnail.picture.src).toContain(part)
+  })
+
+  it('W84: with neither field filled in, the shop and the gift card show no picture, as before', () => {
+    const empty = { ...navigation, menuLinks: navigation.menuLinks.map((link) => ({ ...link, thumbnail: null })) }
+    const links = frameContent(settings, empty, '2026').menuLinks
+    expect(links.map((link) => [link.label, link.thumbnail !== null])).toEqual([
+      ['Home', false],
+      ['Exclusive Hire', true],
+      ['Shop', false],
+      ['Solstice', false],
+      ['The Experience', true],
+      ['Manage Cookies', false],
+      ['Gift Cards', false],
+    ])
   })
 })
 
@@ -108,7 +145,7 @@ describe('with nothing in Sanity yet', () => {
 
   it('one document without the other is fine', () => {
     expect(frameContent(settings, null, '2026').menuLinks).toEqual([])
-    expect(frameContent(null, navigation, '2026').menuLinks).toHaveLength(6)
+    expect(frameContent(null, navigation, '2026').menuLinks).toHaveLength(7)
   })
 })
 

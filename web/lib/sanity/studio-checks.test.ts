@@ -70,9 +70,41 @@ describe('W83: a new document has no empty share picture', () => {
   it('every document type with an SEO block starts without one', () => {
     const withSeo = SCHEMA_FILES.filter((file) => /type: 'seo'/.test(studioFile(`schemaTypes/${file}`)))
     expect(withSeo).toEqual(['contentPage.ts', 'event.ts', 'giftCardType.ts', 'infoPage.ts', 'product.ts', 'shopSettings.ts', 'siteSettings.ts'])
-    for (const file of withSeo.filter((one) => one !== 'siteSettings.ts')) expect(studioFile(`schemaTypes/${file}`), file).toMatch(/initialValue: (NO_SEO_AT_FIRST|\{ \.\.\.NO_THUMBNAIL_AT_FIRST, \.\.\.NO_SEO_AT_FIRST \}),/)
+    for (const file of withSeo.filter((one) => one !== 'siteSettings.ts')) expect(studioFile(`schemaTypes/${file}`), file).toMatch(/initialValue: (NO_SEO_AT_FIRST|\{ \.\.\.NO_(MENU_)?THUMBNAIL_AT_FIRST, \.\.\.NO_SEO_AT_FIRST \}),/)
     expect(studioFile('schemaTypes/siteSettings.ts')).toContain('initialValue: { defaultSeo: undefined },')
     expect(studioFile('schemaTypes/objects/seo.ts')).toContain('export const NO_SEO_AT_FIRST = { seo: undefined }')
+  })
+})
+
+describe('W84 (WQ92): the thumbnails of the shop and the gift card', () => {
+  const fields = studioFile('schemaTypes/fields/thumbnail.ts')
+
+  it('Shop Settings has a Thumbnail and the gift card a Menu Thumbnail: the media block, described as a page\'s is', () => {
+    expect(fields).toContain("export const thumbnail = menuPicture('thumbnail', 'Thumbnail', 'this page')")
+    expect(fields).toContain("export const shopThumbnail = menuPicture('thumbnail', 'Thumbnail', 'the shop')")
+    expect(fields).toContain("export const giftCardMenuThumbnail = menuPicture('menuThumbnail', 'Menu Thumbnail', 'the gift card')")
+    // One field maker for all three: the media block (WQ43), with the page's own description but for what the link goes to.
+    expect(fields).toMatch(/const menuPicture = [^]*?type: 'media',\s+description: `A picture or a video, shown in the menu when someone points at the link to \$\{linkTo\}\. A video shows its poster first, and plays while the link is pointed at`,/)
+    expect(studioFile('schemaTypes/shopSettings.ts')).toMatch(/\n {4}shopThumbnail,\n/)
+    expect(studioFile('schemaTypes/giftCardType.ts')).toMatch(/\n {4}giftCardMenuThumbnail,\n/)
+  })
+
+  // As a page's thumbnail: the media block's own default would give a new document an empty picture that can't be
+  // published (briefs/W84-logs/initial-values-2.txt: Sanity's own resolver).
+  it('a new Shop Settings or gift card starts with none', () => {
+    expect(studioFile('schemaTypes/shopSettings.ts')).toContain('initialValue: { ...NO_THUMBNAIL_AT_FIRST, ...NO_SEO_AT_FIRST },')
+    expect(studioFile('schemaTypes/giftCardType.ts')).toContain('initialValue: { ...NO_MENU_THUMBNAIL_AT_FIRST, ...NO_SEO_AT_FIRST },')
+    expect(fields).toContain('export const NO_MENU_THUMBNAIL_AT_FIRST = { menuThumbnail: undefined }')
+  })
+
+  // The gift card's first gallery picture stays its shop and staff-app picture: the Worker's Sanity webhook reads the
+  // galleries (scripts/check-fast-level.mjs: WEBHOOK_FIELDS), and never the Menu Thumbnail.
+  it("the Worker's Sanity webhook reads neither field", () => {
+    const route = readFileSync(path.resolve(__dirname, '../../app/api/sanity/webhook/route.ts'), 'utf8')
+    const sync = readFileSync(path.resolve(__dirname, '../../server/rules/catalog/sanity-sync.ts'), 'utf8')
+    for (const source of [route, sync]) expect(source).not.toMatch(/menuThumbnail|payload\.thumbnail\b|shopSettings/)
+    const levels = readFileSync(path.resolve(__dirname, '../../scripts/check-fast-level.mjs'), 'utf8')
+    expect(levels).toContain("giftCardType: ['name', 'physicalGallery', 'digitalGallery'],")
   })
 })
 

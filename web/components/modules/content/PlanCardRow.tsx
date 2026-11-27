@@ -16,6 +16,9 @@ type PlanCardRowProps = {
  * screen: the button of a card that is half in the window would take focus where it stands, partly out of sight.
  * A press with a mouse or a finger moves nothing (the note on <html> is components/frame/InputKind.tsx's, as the
  * focus ring's rule reads it).
+ * WQ93 amended: the strip rests only with a card lined up at the grid's left margin (or at its end), so a card that
+ * is not wholly in view is brought to that place: its start at the margin, or as near as the strip's end allows,
+ * which still shows it whole. (Brought in by its right edge, the strip's snapping could carry it back out again.)
  */
 function bringCardIntoView(event: FocusEvent<HTMLDivElement>) {
   if (document.documentElement.dataset.input === 'pointer') return
@@ -26,8 +29,7 @@ function bringCardIntoView(event: FocusEvent<HTMLDivElement>) {
   // The row's margin: how far its first card stands inside it.
   const margin = row.firstElementChild.getBoundingClientRect().left - row.getBoundingClientRect().left
   const [outer, inner] = [strip.getBoundingClientRect(), card.getBoundingClientRect()]
-  if (inner.left - margin < outer.left) strip.scrollBy({ left: inner.left - margin - outer.left })
-  else if (inner.right + margin > outer.right) strip.scrollBy({ left: inner.right + margin - outer.right })
+  if (inner.left - margin < outer.left || inner.right + margin > outer.right) strip.scrollBy({ left: inner.left - margin - outer.left })
 }
 
 /**
@@ -42,6 +44,8 @@ function bringCardIntoView(event: FocusEvent<HTMLDivElement>) {
  * It is the browser's own sideways scrolling: a finger swipes it, Lenis leaves a sideways gesture over it alone
  * (`data-lenis-prevent-horizontal`, as the GalleryCarousel), and the keyboard brings each card into view by reaching
  * what it holds (`bringCardIntoView`). The module's section must be a size container (`@container`).
+ * WQ93 amended (Wayne, 27 Nov): wherever it scrolls it settles as the GalleryCarousel does, on the nearest card lined
+ * up at the grid's left margin: the browser's own scroll snapping, in the same utilities.
  */
 export function PlanCardRow({ insetColumns, drawn, cards }: PlanCardRowProps) {
   const sharedBy = cards.length > drawn ? cards.length : drawn

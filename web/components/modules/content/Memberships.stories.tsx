@@ -312,6 +312,35 @@ export const Tablet: Story = {
   },
 }
 
+/**
+ * WQ93 amended (Wayne, 27 Nov): wherever the row scrolls sideways it settles as the GalleryCarousel does, by the
+ * browser's own scroll snapping: on the nearest card, lined up at the grid's left margin (16). At the row's end it is
+ * not forced on: the last card stands the margin in from the window's right edge. The Session Passes row is the same
+ * row (PlanCardRow).
+ */
+export const SettlesOnACard: Story = {
+  name: 'On a phone: the row settles on the nearest card',
+  globals: MOBILE,
+  play: async ({ canvasElement }) => {
+    const { strip, cards } = parts(canvasElement)
+    await fontsIn(cards[0]!.querySelector('[data-plan-card="name"]')!)
+    await expect([getComputedStyle(strip).scrollSnapType, getComputedStyle(strip).scrollPaddingInlineStart]).toEqual(['x mandatory', '16px'])
+    await expect(cards.map((card) => getComputedStyle(card.closest('[data-plan-cards="card"]')!).scrollSnapAlign)).toEqual(['start', 'start', 'start'])
+    // The cards' places: 0, 305 (a card's 297 and the 8 after it), and the row's end, 549, where the third stops short.
+    await expect(strip.scrollWidth - strip.clientWidth).toBe(549)
+    // Left by a swipe between the first two cards, nearer the second: the second comes to the margin.
+    strip.scrollTo({ left: 200, behavior: 'instant' })
+    await waitFor(() => expect([near(strip.scrollLeft), near(box(cards[1]!).left)]).toEqual([305, 16]))
+    // Nearer the first: back to the first.
+    strip.scrollTo({ left: 100, behavior: 'instant' })
+    await waitFor(() => expect([near(strip.scrollLeft), near(box(cards[0]!).left)]).toEqual([0, 16]))
+    // Towards the end: the end, with the last card whole and the margin after it.
+    strip.scrollTo({ left: 500, behavior: 'instant' })
+    await waitFor(() => expect([near(strip.scrollLeft), near(390 - box(cards[2]!).right)]).toEqual([549, 16]))
+    await expect(document.documentElement.scrollWidth).toBe(390)
+  },
+}
+
 export const Laptop: Story = {
   name: 'At 1024px: three cards just fit',
   globals: LAPTOP,

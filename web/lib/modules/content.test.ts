@@ -363,6 +363,8 @@ describe('the GalleryCarousel (WQ82)', () => {
       flex: 'none',
       width: 'var(--gallery-span)',
       'aspect-ratio': 'var(--gallery-shape)',
+      // WQ93: the browser lines the strip up on a picture's start.
+      'scroll-snap-align': 'start',
     })
     expect(ruleNamed(css, '@utility gallery-row').declarations).toMatchObject({ display: 'flex', 'align-items': 'center', 'column-gap': 'var(--gallery-gap)', 'padding-inline': 'var(--grid-margin)' })
   })
@@ -372,6 +374,36 @@ describe('the GalleryCarousel (WQ82)', () => {
     expect(carousel).toContain('data-lenis-prevent-horizontal=""')
     expect(carousel).toContain("import { DURATION_LONG, EASE_SMOOTH } from '@/lib/motion/tokens'")
     expect(carousel).toContain('if (reducedMotion || Math.abs(end - from) < 1) {')
-    expect(carousel).toContain("if (reducedMotion || event.type === 'pointercancel') return")
+    // W84 (WQ93): a release with no glide (reduced motion, a pointer taken away, held still) no longer stays where it
+    // is: it goes to the nearest picture.
+    expect(carousel).toContain("if (reducedMotion || event.type === 'pointercancel' || event.timeStamp - last.at > SPEED_OVER || last.at === first.at) {")
+  })
+
+  it('WQ93: it settles on a picture: the browser snaps each picture by its start at the grid margin, and never while script moves the strip', () => {
+    const strip = ruleNamed(css, '@utility gallery-strip')
+    expect([strip.declarations['scroll-snap-type'], strip.declarations['scroll-padding-inline-start']]).toEqual(['x mandatory', 'var(--grid-margin)'])
+    // While a mouse drags it, it glides or a key moves it, the snapping is off: it would pull every place script sets.
+    expect(childNamed(strip, '&[data-script-moves]').declarations).toEqual({ 'scroll-snap-type': 'none' })
+    const carousel = read('components/modules/content/GalleryCarousel.tsx')
+    expect(carousel).toContain("const SCRIPT_MOVES = 'data-script-moves'")
+    // A mouse's glide ends at the place nearest to where it would have stopped, so it slows straight into line; a
+    // release with no speed goes to the nearest from where it is. Neither place is past the strip's end.
+    expect(carousel).toContain('moveTo(nearestStop(element, element.scrollLeft + distance), true)')
+    expect(carousel).toContain('moveTo(nearestStop(element, element.scrollLeft), false)')
+    expect(carousel).toContain('const stops = placesOf(element).map((place) => Math.min(place, end))')
+  })
+
+  it('WQ93 amended: the rows of Membership and Session Pass cards and Similar Merch settle the same way; the product gallery is as it was', () => {
+    const strip = ruleNamed(css, '@utility plan-strip').declarations
+    expect([strip['scroll-snap-type'], strip['scroll-padding-inline-start']]).toEqual(['x mandatory', 'var(--grid-margin)'])
+    expect(ruleNamed(css, '@utility plan-card').declarations['scroll-snap-align']).toBe('start')
+    // A card brought in for the keyboard comes to the same place the row rests at: its start at the margin.
+    expect(read('components/modules/content/PlanCardRow.tsx')).toContain(
+      'if (inner.left - margin < outer.left || inner.right + margin > outer.right) strip.scrollBy({ left: inner.left - margin - outer.left })',
+    )
+    const similar = read('components/modules/shop/UpSellRow.tsx')
+    expect(similar).toContain('<ul className="flex snap-x snap-mandatory gap-8 overflow-x-auto px-16 ')
+    expect(similar).toContain('shrink-0 snap-start scroll-ml-16 ')
+    expect(read('components/shop/ProductGallery.tsx')).toContain('className="flex snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] md:flex-col md:overflow-x-visible [&::-webkit-scrollbar]:hidden"')
   })
 })

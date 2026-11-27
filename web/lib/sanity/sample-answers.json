@@ -61,7 +61,8 @@
           },
           "url": null,
           "sectionId": null
-        }
+        },
+        "thumbnail": null
       },
       {
         "key": "2",
@@ -96,7 +97,8 @@
           },
           "url": null,
           "sectionId": null
-        }
+        },
+        "thumbnail": null
       },
       {
         "key": "3",
@@ -106,6 +108,22 @@
           "document": null,
           "url": null,
           "sectionId": null
+        },
+        "thumbnail": {
+          "kind": "image",
+          "image": {
+            "ref": "image-hero-1600x900-jpg",
+            "width": 1600,
+            "height": 900,
+            "alt": "Picture hero",
+            "crop": {
+              "top": 0,
+              "bottom": 0,
+              "left": 0.25,
+              "right": 0
+            },
+            "hotspot": null
+          }
         }
       },
       {
@@ -121,7 +139,8 @@
           },
           "url": null,
           "sectionId": null
-        }
+        },
+        "thumbnail": null
       },
       {
         "key": "5",
@@ -131,7 +150,8 @@
           "document": null,
           "url": null,
           "sectionId": null
-        }
+        },
+        "thumbnail": null
       },
       {
         "key": "9",
@@ -167,7 +187,8 @@
           },
           "url": null,
           "sectionId": null
-        }
+        },
+        "thumbnail": null
       },
       {
         "key": "10",
@@ -182,6 +203,39 @@
           },
           "url": null,
           "sectionId": null
+        },
+        "thumbnail": null
+      },
+      {
+        "key": "11",
+        "label": "Gift Cards",
+        "link": {
+          "destination": "giftCard",
+          "document": null,
+          "url": null,
+          "sectionId": null
+        },
+        "thumbnail": {
+          "kind": "video",
+          "url": "https://cdn.sanity.io/files/p/d/vid.mp4",
+          "mobileUrl": null,
+          "poster": {
+            "ref": "image-tall-900x1600-jpg",
+            "width": 900,
+            "height": 1600,
+            "alt": "",
+            "crop": null,
+            "hotspot": {
+              "x": 0.5,
+              "y": 0.4,
+              "width": 0.6,
+              "height": 0.6
+            }
+          },
+          "mobilePoster": null,
+          "description": "Steam",
+          "captionsUrl": "https://cdn.sanity.io/files/p/d/cap.vtt",
+          "hasSound": false
         }
       }
     ],

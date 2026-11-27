@@ -74,6 +74,8 @@ function MenuVideo({ url, playing }: { url: string; playing: boolean }) {
  * page thumbnail opens out from its middle on the left. A phone has neither: its links stay dark (Wayne, 24 Nov).
  * W82 (WQ90): a thumbnail that is a video opens out as its poster and plays while the link is pointed at
  * (MenuVideo); with reduced motion it is the poster only.
+ * W84 (WQ92): a link to the shop and a link to the gift card have thumbnails too (Shop Settings' Thumbnail, the gift
+ * card's Menu Thumbnail), which arrive as a page's does (lib/frame/content.ts) and are drawn no differently.
  */
 export function Menu({ id, open, links, onClose, returnFocusTo, reducedMotion: reducedMotionSet }: MenuProps) {
   const visitorReducedMotion = usePrefersReducedMotion()

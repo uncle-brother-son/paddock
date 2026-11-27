@@ -100,9 +100,14 @@ export type SiteSettings = z.infer<typeof siteSettingsSchema>
 
 const navLinkSchema = z.object({ key: z.string(), label: z.string(), link: linkSchema })
 export type NavLink = z.infer<typeof navLinkSchema>
+/**
+ * A menu link. `thumbnail` (W84, WQ92): the shop's own thumbnail on a link to the shop, the gift card's on a link to
+ * the gift card, null on any other link (a page's is its document's: `link.document.thumbnail`).
+ */
+const menuLinkSchema = navLinkSchema.extend({ thumbnail: mediaSchema.nullable() })
 /** `footerGroups`: the footer's columns of links, left to right (W73). */
 export const navigationSchema = z.object({
-  menuLinks: z.array(navLinkSchema),
+  menuLinks: z.array(menuLinkSchema),
   footerGroups: z.array(z.object({ key: z.string(), links: z.array(navLinkSchema) })),
 })
 export type Navigation = z.infer<typeof navigationSchema>

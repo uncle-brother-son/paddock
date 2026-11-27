@@ -14,11 +14,12 @@ export type FrameLink = { key: string; label: string; href: string; outside: boo
 /**
  * What the desktop menu shows while a link is hovered: its page's thumbnail (WQ24). W82 (WQ90): a picture, or a
  * video: `picture` is then its poster and `videoUrl` its file. The menu shows it from 768px only, so it is the
- * film's desktop file and poster (WQ35).
+ * film's desktop file and poster (WQ35). W84 (WQ92): a link to the shop shows Shop Settings' Thumbnail and a link to
+ * the gift card the gift card's Menu Thumbnail, each the same way as a page's.
  */
 export type MenuThumbnail = { picture: SizedImage; videoUrl: string | null }
 
-/** A menu link, with its hover picture or video (null: its page has none). */
+/** A menu link, with its hover picture or video (null: its page, the shop or the gift card has none; an event and an outside address never have one). */
 export type FrameMenuLink = FrameLink & { thumbnail: MenuThumbnail | null }
 
 export type FrameFooterGroup = { key: string; links: FrameLink[] }
@@ -44,7 +45,7 @@ const MENU_THUMBNAIL_WIDTHS = [240, 480, 720] as const
 
 const isOutside = (link: NavLink['link']): boolean => link.destination === 'external'
 
-/** A page's thumbnail as the menu draws it: the picture, or the video's poster, cropped 4 by 5; and the video's file. */
+/** A thumbnail as the menu draws it: the picture, or the video's poster, cropped 4 by 5; and the video's file. */
 const menuThumbnail = (media: Media): MenuThumbnail => ({
   picture: sizedImage(stillOf(media).wide, MENU_THUMBNAIL_RATIO, MENU_THUMBNAIL_WIDTHS),
   videoUrl: videoOf(media)?.url ?? null,
@@ -67,7 +68,8 @@ export function frameContent(settings: SiteSettings | null, navigation: Navigati
     (navigation?.menuLinks ?? []).map((navLink) => {
       const link = frameLink(navLink)
       if (!link) return null
-      const thumbnail = navLink.link.document?.thumbnail ?? null
+      // A page's thumbnail comes with its document; the shop's and the gift card's with the menu link itself (W84).
+      const thumbnail = navLink.link.document?.thumbnail ?? navLink.thumbnail
       return { ...link, thumbnail: thumbnail ? menuThumbnail(thumbnail) : null }
     }),
   )

@@ -25,7 +25,9 @@ type UpSellRowProps =
  * - Type=products, Similar Merch (desktop 1402:49922, mobile 1402:49921): "Shop all", and a row of ProductCards to
  *   swipe through, which runs off the window's right edge. A card's width: Figma draws 400 on the desktop, which is
  *   no column of the grid; it is 7 columns (405 on Figma's frame), the nearest (W73, Wayne). On a phone it is 3 of
- *   the 6 columns, as drawn (175).
+ *   the 6 columns, as drawn (175). WQ93 amended (Wayne, 27 Nov): the row settles as the GalleryCarousel does, on the
+ *   nearest card lined up at the grid's left margin (the browser's own scroll snapping, now always, not only when a
+ *   card is near the margin); never forced past its end.
  * - Type=events, Other Events (desktop 1402:50607, mobile 1402:50615; on the Event page 1684:41961 and 1684:42029):
  *   "All Events" (WQ60), and the next upcoming events as EventCards: from 768px three across, 8 of the grid's
  *   columns each; below, one under the other, the whole width, 80px apart.
@@ -51,7 +53,7 @@ export function UpSellRow(props: UpSellRowProps) {
         </div>
       </Grid>
       {props.type === 'products' ? (
-        <ul className="flex snap-x gap-8 overflow-x-auto px-16 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <ul className="flex snap-x snap-mandatory gap-8 overflow-x-auto px-16 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {props.cards.map((card) => (
             <li
               key={card.id}

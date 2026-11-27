@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/nextjs-vite'
-import { expect, within } from 'storybook/test'
+import { expect, waitFor, within } from 'storybook/test'
 
 import { SAMPLE_LIST_ADDRESS, SAMPLE_OTHER_EVENTS } from '@/components/events/sample-events'
+import { SAMPLE_SIMILAR } from '@/components/shop/sample-shop'
 
 import { UpSellRow } from './UpSellRow'
 
@@ -91,5 +92,33 @@ export const NoOthers: Story = {
   args: { cards: [] },
   play: async ({ canvasElement }) => {
     await expect(row(canvasElement)).toBeNull()
+  },
+}
+
+/**
+ * Type=products, Similar Merch (mobile 1402:49921): cards of 3 of the grid's 6 columns (175), 8px apart, running off
+ * the window's right edge. WQ93 amended (Wayne, 27 Nov): the row settles as the GalleryCarousel does, by the browser's
+ * own scroll snapping: on the nearest card, lined up at the grid's left margin (16). At its end it is not forced on:
+ * the last card stands the margin in from the window's right edge.
+ */
+export const SimilarMerchSettles: Story = {
+  name: 'Type=products: the row settles on the nearest card',
+  globals: { viewport: { value: 'mobile', isRotated: false } },
+  args: { type: 'products', cards: SAMPLE_SIMILAR },
+  play: async ({ canvasElement }) => {
+    const list = canvasElement.querySelector('[data-shop="similar"] ul') as HTMLElement
+    const cards = [...list.children]
+    await expect(cards.map((card) => [Math.round(box(card).left), Math.round(box(card).width)])).toEqual([[16, 175], [199, 175], [382, 175], [565, 175]])
+    await expect(getComputedStyle(list).scrollSnapType).toBe('x mandatory')
+    await expect(cards.map((card) => [getComputedStyle(card).scrollSnapAlign, getComputedStyle(card).scrollMarginLeft])).toEqual(cards.map(() => ['start', '16px']))
+    // The cards' places: 0, 183 (a card's 175 and the 8 after it), and the row's end, 366.
+    await expect(list.scrollWidth - list.clientWidth).toBe(366)
+    list.scrollTo({ left: 120, behavior: 'instant' })
+    await waitFor(() => expect([Math.round(list.scrollLeft), Math.round(box(cards[1]!).left)]).toEqual([183, 16]))
+    list.scrollTo({ left: 60, behavior: 'instant' })
+    await waitFor(() => expect([Math.round(list.scrollLeft), Math.round(box(cards[0]!).left)]).toEqual([0, 16]))
+    list.scrollTo({ left: 330, behavior: 'instant' })
+    await waitFor(() => expect([Math.round(list.scrollLeft), Math.round(390 - box(cards[3]!).right)]).toEqual([366, 16]))
+    await expect(document.documentElement.scrollWidth).toBe(390)
   },
 }

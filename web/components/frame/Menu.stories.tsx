@@ -7,7 +7,7 @@ import { OverlayTexture } from '@/components/ui/media/Overlay'
 
 import { Header } from './Header'
 import { HeaderLogo } from './HeaderLogo'
-import { EMPTY_FRAME, SAMPLE_FRAME, SamplePage, withVideoThumbnail } from './sample-content'
+import { EMPTY_FRAME, SAMPLE_FRAME, SAMPLE_MENU_EVERY_THUMBNAIL, SamplePage, withVideoThumbnail } from './sample-content'
 
 /** W82: the header with the first menu link's thumbnail a video, once the sample video has been made (a second or so). */
 function HeaderWithAVideo(args: ComponentProps<typeof Header>) {
@@ -111,6 +111,45 @@ export const Hover: Story = {
     await expect(Math.round(pictures[0]!.getBoundingClientRect().width)).toBe(228)
     await expect(Math.round(pictures[0]!.getBoundingClientRect().height)).toBe(285)
     await expect(getComputedStyle(thumbnails[1]!).clipPath).toBe('inset(50% 0px)')
+  },
+}
+
+/**
+ * W84 (WQ92): every one of the six links with a thumbnail. Shop and Gift Cards are not pages: the shop's is Shop
+ * Settings' Thumbnail and the gift card's its own Menu Thumbnail (apart from its galleries), and each opens out while
+ * its link is pointed at, exactly as a page's does. A link with the field left empty shows none (the Hover story).
+ */
+export const HoverEveryLinkWithAThumbnail: Story = {
+  name: 'Hover, every link with a thumbnail',
+  args: { menuLinks: SAMPLE_MENU_EVERY_THUMBNAIL },
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async (context) => {
+    await openMenu(context)
+    const dialog = dialogIn(context.canvasElement)
+    const links = within(dialog).getAllByRole('link')
+    const thumbnails = [...dialog.querySelectorAll<HTMLElement>('[data-menu-thumbnail]')]
+    await expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
+      ['The experience', '/the-experience'],
+      ['Bookings & Memberships', '/bookings-memberships'],
+      ['Exclusive Hire', '/exclusive-hire'],
+      ['Smoothies', '/smoothies'],
+      ['Shop', '/shop'],
+      ['Gift Cards', '/shop/gift-card'],
+    ])
+    await expect(thumbnails).toHaveLength(6)
+
+    // Each link in turn, Shop and Gift Cards as the pages: its own picture opens out, every other one is shut.
+    for (const [index, link] of links.entries()) {
+      await userEvent.hover(link)
+      await waitFor(() => expect(thumbnails.map((thumbnail) => getComputedStyle(thumbnail).clipPath)).toEqual(links.map((_, other) => (other === index ? 'inset(0px)' : 'inset(50% 0px)'))), {
+        timeout: 3000,
+      })
+      const picture = thumbnails[index]!.querySelector('img')!
+      await expect(picture.getAttribute('src')).toBe(SAMPLE_MENU_EVERY_THUMBNAIL[index]!.thumbnail!.picture.src)
+      await expect([Math.round(picture.getBoundingClientRect().width), Math.round(picture.getBoundingClientRect().height)]).toEqual([228, 285])
+    }
+    // Six different pictures.
+    await expect(new Set(thumbnails.map((thumbnail) => thumbnail.querySelector('img')!.getAttribute('src'))).size).toBe(6)
   },
 }
 

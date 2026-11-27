@@ -808,6 +808,12 @@ body {
  *   - 8px (the gutter) between two below 768px; from 768px one empty column and its two gutters.
  *   - The row starts at the grid's left margin and ends with the same margin after its last picture.
  * The strip shows no scrollbar, and its ends do not hand a sideways swipe on to the browser (Back, Forward).
+ *   - WQ93 (Wayne, 27 Nov; as wild.as/about): it settles on a picture. The browser's own scroll snapping: after a
+ *     finger's or a trackpad's swipe it eases to the nearest picture lined up at the grid's left margin (each picture
+ *     snaps by its start, the margin in from the strip's edge). It is never forced past its end, where the last
+ *     pictures stop short. While the component's script moves the strip (a mouse's drag, its glide, a keyboard step)
+ *     it marks it `data-script-moves` and the snapping is off, so the browser does not pull against it; script
+ *     leaves it at one of the same places.
  *
  * How many columns each is (--gallery-upright-columns, --gallery-wide-columns, and --gallery-gap-columns for the empty
  * columns between two) is set with the grid, in `:root` above: the Mobile values, and the Desktop ones from 768px.
@@ -821,10 +827,16 @@ body {
   --gallery-gap: calc(var(--gallery-gap-columns) * (var(--gallery-column) + var(--grid-gutter)) + var(--grid-gutter));
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline-start: var(--grid-margin);
   scrollbar-width: none;
 
   &::-webkit-scrollbar {
     display: none;
+  }
+
+  &[data-script-moves] {
+    scroll-snap-type: none;
   }
 }
 
@@ -840,6 +852,7 @@ body {
   flex: none;
   width: var(--gallery-span);
   aspect-ratio: var(--gallery-shape);
+  scroll-snap-align: start;
 }
 
 /*
@@ -860,6 +873,8 @@ body {
  *     margin, as on a phone.
  * Which of the two a width of screen gets (--plan-cards-share) and the phone card's columns (--plan-card-columns) are
  * set with the grid, in `:root` above. The strip shows no scrollbar.
+ *   - WQ93 amended (Wayne, 27 Nov): wherever the row scrolls sideways it settles as the GalleryCarousel does, by the
+ *     browser's own scroll snapping: the nearest card lined up at the grid's left margin, never forced past its end.
  */
 @utility plan-strip {
   --plan-card-least: 297px;
@@ -872,6 +887,8 @@ body {
   );
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline-start: var(--grid-margin);
   scrollbar-width: none;
 
   &::-webkit-scrollbar {
@@ -890,6 +907,7 @@ body {
 @utility plan-card {
   flex: none;
   width: calc(var(--plan-cards-share) * var(--plan-card-shared) + (1 - var(--plan-cards-share)) * var(--plan-card-alone));
+  scroll-snap-align: start;
 }
 
 /*

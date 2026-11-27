@@ -344,6 +344,41 @@ describe('W82: page thumbnails', () => {
   })
 })
 
+// W84 (WQ92): the menu's links to the shop and to the gift card are not pages, so each has a thumbnail of its own. The
+// navigation sample was made again by the real engine (briefs/W84-logs/tools/gen-page-samples.mjs, in the staff app
+// repo) over Shop Settings with a Thumbnail (a picture with a crop), the gift card with a Menu Thumbnail (a video) and
+// other pictures in its galleries, a gift card made later and a draft of one made earlier, each with a picture.
+describe('W84: the thumbnails of the shop and the gift card', () => {
+  type Thumbnail = { kind: string; image?: { ref: string }; poster?: { ref: string } } | null
+  const menuLinks = answers.navigation.menuLinks as Array<{ label: string; thumbnail: Thumbnail }>
+  const own = (label: string): Thumbnail | undefined => menuLinks.find((link) => link.label === label)?.thumbnail
+
+  it("a link to the shop has Shop Settings' Thumbnail", () => {
+    expect(own('Shop')).toMatchObject({ kind: 'image', image: { ref: 'image-hero-1600x900-jpg', crop: { left: 0.25 } } })
+    expect(reads.navigation.query).toContain('link.destination == "shop" => *[_id == "shopSettings"][0]{"thumbnail": select(\n  defined(thumbnail) => thumbnail{"item": ')
+  })
+
+  it("a link to the gift card has the Menu Thumbnail of the first-made published gift card, never a picture of its galleries", () => {
+    // The gift card's galleries hold the thumb and hero pictures; the later one's and the draft's thumbnail is thumb.
+    expect(own('Gift Cards')).toMatchObject({ kind: 'video', url: 'https://cdn.sanity.io/files/p/d/vid.mp4', poster: { ref: 'image-tall-900x1600-jpg' } })
+    expect(reads.navigation.query).toContain(
+      'link.destination == "giftCard" => (*[_type == "giftCardType" && !(_id in path("drafts.**"))] | order(_createdAt asc))[0]{"thumbnail": select(\n  defined(menuThumbnail) => menuThumbnail{"item": ',
+    )
+    expect(reads.navigation.query).not.toMatch(/Gallery/)
+  })
+
+  it('every other menu link has none of its own, and a footer link is not asked for one', () => {
+    expect(menuLinks.filter((link) => link.thumbnail !== null).map((link) => link.label)).toEqual(['Shop', 'Gift Cards'])
+    for (const link of footerLinks) expect(link).not.toHaveProperty('thumbnail')
+  })
+
+  it('a menu link without the field does not fit: the answer is refused', () => {
+    const [first, ...rest] = answers.navigation.menuLinks
+    const withoutIt = { key: first!.key, label: first!.label, link: first!.link }
+    expect(reads.navigation.schema.safeParse({ ...answers.navigation, menuLinks: [withoutIt, ...rest] }).success).toBe(false)
+  })
+})
+
 describe('linkHref', () => {
   const links = [...answers.navigation.menuLinks, ...footerLinks].map(({ label, link }) => [label, linkHref(link as Link)])
 
@@ -356,6 +391,7 @@ describe('linkHref', () => {
       ['Not published', null],
       ['The Experience', '/the-experience'],
       ['Manage Cookies', '/info/manage-cookies'],
+      ['Gift Cards', '/shop/gift-card'],
       ['Terms', '/info/terms'],
       ['Outside', 'https://example.com'],
     ])

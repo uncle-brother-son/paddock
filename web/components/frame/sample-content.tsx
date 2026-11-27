@@ -41,6 +41,17 @@ export const SAMPLE_FRAME: FrameContent = {
   },
 }
 
+/**
+ * W84 (WQ92): the menu with a thumbnail on every one of its six links. Shop and Gift Cards are not pages: the shop's
+ * is Shop Settings' Thumbnail and the gift card's its own Menu Thumbnail, and the menu shows each as it shows a page's.
+ */
+export const SAMPLE_MENU_EVERY_THUMBNAIL: FrameMenuLink[] = [
+  ...SAMPLE_FRAME.menuLinks.slice(0, 3),
+  { ...page('m4', 'Smoothies', '/smoothies'), thumbnail: thumbnail('#8a9a5b') },
+  { ...page('m5', 'Shop', '/shop'), thumbnail: thumbnail('#d9c7a8') },
+  { ...page('m6', 'Gift Cards', '/shop/gift-card'), thumbnail: thumbnail('#bd9b5d') },
+]
+
 /** What the frame holds when Sanity has no Site settings and no Navigation yet. */
 export const EMPTY_FRAME: FrameContent = {
   menuLinks: [],

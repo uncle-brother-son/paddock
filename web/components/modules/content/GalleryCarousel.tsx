@@ -55,6 +55,16 @@ const SIZES = { phone: { upright: '80vw', wide: '100vw' }, desktop: { upright: '
 
 type Drag = { pointer: number; x: number; left: number; moved: boolean; trail: Array<{ at: number; x: number }> }
 
+/** The strip's mark while script is moving it: the `gallery-strip` utility switches the browser's snapping off under it (WQ93). */
+const SCRIPT_MOVES = 'data-script-moves'
+
+/** Where the strip stands with each picture at the grid's left margin, where the first one starts. The last ones' places can be past the strip's end. */
+const placesOf = (element: HTMLElement): number[] => {
+  const row = element.firstElementChild
+  const first = row?.firstElementChild?.getBoundingClientRect().left ?? 0
+  return [...(row?.children ?? [])].map((item) => item.getBoundingClientRect().left - first)
+}
+
 type GalleryCarouselProps = GalleryCarouselContent & {
   /** For Storybook and tests: reduced motion on or off, whatever the visitor's own setting. */
   reducedMotion?: boolean
@@ -76,8 +86,16 @@ type GalleryCarouselProps = GalleryCarouselContent & {
  * It is the browser's own sideways scrolling, so a finger swipes it as it does any row, with the phone's own
  * momentum, and a trackpad's sideways swipe moves it too (Lenis leaves a sideways gesture over it alone:
  * `data-lenis-prevent-horizontal`; an up-and-down one still scrolls the page smoothly).
- * - A mouse drags it: press, move, let go. Let go of while moving, it glides on and slows to a stop along the site's
- *   curve (`GLIDE`); with reduced motion on it stops where it is let go of.
+ *
+ * It settles on a picture (WQ93, Wayne, 27 Nov; as wild.as/about, a slider and not a free one): however it is moved,
+ * it comes to rest with the nearest picture lined up at the grid's left margin. It is never forced past its end: there
+ * the last pictures stop short of the margin.
+ * - A finger and a trackpad: the browser's own scroll snapping (`gallery-strip`: each picture snaps by its start, the
+ *   grid's margin in from the strip's edge), so the browser eases it into line itself.
+ * - A mouse drags it: press, move, let go. Let go of while moving, it glides on along the site's curve (`GLIDE`), and
+ *   the glide's end is the picture nearest to where it would have stopped, so it slows straight into line; let go of
+ *   while still, it eases to the nearest picture. With reduced motion on there is no glide: it goes to the nearest
+ *   picture at once. While script moves it the browser's snapping is off (`data-script-moves`), or the two would fight.
  * - The keyboard: while there is more than the window shows, the strip takes focus and the arrow keys move it one
  *   picture at a time (Home and End: its two ends), over the long duration with the smooth curve; reduced motion jumps.
  * A video is drawn as HeroMedia draws one (WQ35, WQ43), with its own buttons, which a press still reaches.
@@ -113,6 +131,30 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
     frame.current = 0
   }
 
+  /**
+   * WQ93: while script moves the strip (a mouse's drag, a glide, a keyboard step) the browser's own snapping is off,
+   * by this mark (`gallery-strip` in app/globals.css): it would pull every place script sets to the nearest picture
+   * at once. Script always leaves the strip at a place the browser snaps to, so nothing moves when it is handed back.
+   */
+  const scriptMoves = (moving: boolean) => strip.current?.toggleAttribute(SCRIPT_MOVES, moving)
+
+  /** Ends whatever script was doing and hands the strip back to the browser, which lines it up itself. */
+  const handBack = () => {
+    stop()
+    scriptMoves(false)
+  }
+
+  /**
+   * WQ93: the place the strip settles at, nearest to `to`: a picture lined up at the grid's left margin, or the
+   * strip's end, where the last pictures stop short (it is never forced past its end). The browser's own snapping
+   * (a finger, a trackpad) settles at the same places.
+   */
+  const nearestStop = (element: HTMLDivElement, to: number): number => {
+    const end = element.scrollWidth - element.clientWidth
+    const stops = placesOf(element).map((place) => Math.min(place, end))
+    return stops.reduce((best, place) => (Math.abs(place - to) < Math.abs(best - to) ? place : best), 0)
+  }
+
   /** Moves the strip to `to`, never past either end: along the whole curve, or as a glide along its slowing part. */
   const moveTo = (to: number, glide: boolean) => {
     const element = strip.current
@@ -122,8 +164,10 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
     const end = clamp(to, 0, element.scrollWidth - element.clientWidth)
     if (reducedMotion || Math.abs(end - from) < 1) {
       element.scrollLeft = end
+      scriptMoves(false)
       return
     }
+    scriptMoves(true)
     const startsAt = glide ? GLIDE.at : 0
     const doneAtStart = glide ? GLIDE.done : 0
     const length = DURATION_LONG * 1000 * (1 - startsAt)
@@ -132,7 +176,12 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
       const through = clamp((now - began) / length, 0, 1)
       const done = (EASE_SMOOTH(startsAt + through * (1 - startsAt)) - doneAtStart) / (1 - doneAtStart)
       element.scrollLeft = from + (end - from) * done
-      frame.current = through < 1 ? requestAnimationFrame(step) : 0
+      if (through < 1) {
+        frame.current = requestAnimationFrame(step)
+        return
+      }
+      frame.current = 0
+      scriptMoves(false)
     }
     frame.current = requestAnimationFrame(step)
   }
@@ -141,7 +190,10 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
     // A finger swipes it natively, with the phone's own momentum. Whatever presses it, a glide under way ends here.
     stop()
     const element = strip.current
-    if (!element || !scrolls || event.pointerType === 'touch' || event.button !== 0) return
+    if (!element || !scrolls || event.pointerType === 'touch' || event.button !== 0) {
+      scriptMoves(false)
+      return
+    }
     drag.current = { pointer: event.pointerId, x: event.clientX, left: element.scrollLeft, moved: false, trail: [{ at: event.timeStamp, x: event.clientX }] }
     dragged.current = false
   }
@@ -163,6 +215,7 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
         // Nothing to do: the strip still follows the pointer while it is over it.
       }
       setDragging(true)
+      scriptMoves(true)
     }
     element.scrollLeft = now.left - moved
     now.trail.push({ at: event.timeStamp, x: event.clientX })
@@ -174,7 +227,12 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
     const now = drag.current
     if (!element || !now || now.pointer !== event.pointerId) return
     drag.current = null
-    if (!now.moved) return
+    if (!now.moved) {
+      // A press that ended a glide part-way, and no drag after it: the strip is between two pictures, so it eases
+      // on to the nearest.
+      if (element.hasAttribute(SCRIPT_MOVES)) moveTo(nearestStop(element, element.scrollLeft), false)
+      return
+    }
     // The click a browser sends after the release comes before any timer: it is the one `clickAfterDrag` stops. If
     // none comes, nothing is left behind to stop a later press.
     setTimeout(() => {
@@ -182,16 +240,33 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
     })
     setDragging(false)
     if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId)
-    if (reducedMotion || event.type === 'pointercancel') return
     const first = now.trail[0]!
     const last = now.trail[now.trail.length - 1]!
-    // Held still before letting go: no speed, no glide.
-    if (event.timeStamp - last.at > SPEED_OVER || last.at === first.at) return
+    // Held still before letting go (or the browser took the pointer away): no speed, no glide. WQ93: it eases to the
+    // nearest picture from where it is; with reduced motion it goes there at once (`moveTo`).
+    if (reducedMotion || event.type === 'pointercancel' || event.timeStamp - last.at > SPEED_OVER || last.at === first.at) {
+      moveTo(nearestStop(element, element.scrollLeft), false)
+      return
+    }
     // Pixels a millisecond, the way the strip was going (the strip moves against the pointer).
     const speed = -(last.x - first.x) / (last.at - first.at)
     // How far a glide that sets off at that speed goes, along the slowing part of the curve.
     const distance = (speed * DURATION_LONG * 1000 * (1 - GLIDE.done)) / GLIDE.speed
-    moveTo(element.scrollLeft + distance, true)
+    // WQ93: the glide's end is the picture nearest to where that glide would have stopped, so it eases straight
+    // there along the same curve and stops lined up: it never stops and is then nudged.
+    moveTo(nearestStop(element, element.scrollLeft + distance), true)
+  }
+
+  /**
+   * A press that ended a glide part-way, whose mouse then leaves the strip before it has become a drag: its release
+   * will not come here, so the strip eases on to the nearest picture now, as it does when that press is let go of.
+   */
+  const pointerLeave = (event: PointerEvent<HTMLDivElement>) => {
+    const element = strip.current
+    const now = drag.current
+    if (!element || !now || now.pointer !== event.pointerId || now.moved || !element.hasAttribute(SCRIPT_MOVES)) return
+    drag.current = null
+    moveTo(nearestStop(element, element.scrollLeft), false)
   }
 
   /** A drag ends in no press: the click that follows it goes nowhere. */
@@ -206,11 +281,7 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
     const element = strip.current
     // Only the strip's own keys: a video's button inside it keeps its own.
     if (!element || event.target !== element || event.altKey || event.ctrlKey || event.metaKey) return
-    const row = element.firstElementChild
-    if (!(row instanceof HTMLElement)) return
-    // Where the strip stands with each picture at the grid's left margin, where the first one starts.
-    const first = row.firstElementChild?.getBoundingClientRect().left ?? 0
-    const stops = [...row.children].map((item) => item.getBoundingClientRect().left - first)
+    const stops = placesOf(element)
     const at = element.scrollLeft
     const to =
       event.key === 'ArrowRight' ? stops.find((place) => place > at + 1) ?? element.scrollWidth
@@ -236,8 +307,10 @@ export function GalleryCarousel({ items, theme, sectionId, reducedMotion: reduce
         onPointerMove={pointerMove}
         onPointerUp={pointerUp}
         onPointerCancel={pointerUp}
+        onPointerLeave={pointerLeave}
         onClickCapture={clickAfterDrag}
-        onWheel={stop}
+        // A trackpad's swipe (or a wheel) is the browser's own scrolling, which lines it up itself.
+        onWheel={handBack}
         onKeyDown={keyDown}
         // A picture is dragged with the strip, never out of it.
         onDragStart={(event) => event.preventDefault()}

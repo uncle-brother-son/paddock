@@ -1,14 +1,15 @@
 import { defineArrayMember, defineField, defineType } from 'sanity'
 import { BasketIcon } from '@sanity/icons'
+import { NO_THUMBNAIL_AT_FIRST, shopThumbnail } from './fields/thumbnail'
 import { NO_SEO_AT_FIRST } from './objects/seo'
 
-// One document (WQ6).
+// One document (WQ6). W84 (WQ92): its Thumbnail is what the menu shows for a link to the shop.
 export const shopSettings = defineType({
   name: 'shopSettings',
   title: 'Shop Settings',
   type: 'document',
   icon: BasketIcon,
-  initialValue: NO_SEO_AT_FIRST,
+  initialValue: { ...NO_THUMBNAIL_AT_FIRST, ...NO_SEO_AT_FIRST },
   fields: [
     defineField({
       name: 'title',
@@ -17,6 +18,7 @@ export const shopSettings = defineType({
       validation: (rule) => rule.required(),
     }),
     defineField({ name: 'intro', title: 'Intro', type: 'text', rows: 3 }),
+    shopThumbnail,
     defineField({
       name: 'featuredOrder',
       title: 'Featured Order',

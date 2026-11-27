@@ -106,9 +106,20 @@ export const SITE_SETTINGS_QUERY = `*[_id == "siteSettings"][0]{
 
 const NAV_LINKS = `{"key": _key, label, "link": link${LINK}}`
 
+/**
+ * W84 (WQ92): a menu link with the thumbnail of the shop or of the gift card, which are not pages: a link to the
+ * shop has Shop Settings' Thumbnail, a link to the gift card the gift card's Menu Thumbnail (the gift card the site
+ * shows: the first made, as GIFT_CARD_QUERY). Null for any other link: a page's thumbnail is its document's (LINK).
+ */
+const MENU_LINKS = `{"key": _key, label, "link": link${LINK}, "thumbnail": select(
+  link.destination == "shop" => *[_id == "shopSettings"][0]{"thumbnail": ${thumbnailAt('thumbnail')}}.thumbnail,
+  link.destination == "giftCard" => (*[_type == "giftCardType" && ${PUBLISHED}] | order(_createdAt asc))[0]{"thumbnail": ${thumbnailAt('menuThumbnail')}}.thumbnail,
+  null
+)}`
+
 /** W73: `footerGroups` are the footer's columns, left to right, each a list of links an editor fills (Wayne, 24 Nov). */
 export const NAVIGATION_QUERY = `*[_id == "navigation"][0]{
-  "menuLinks": coalesce(menuLinks[defined(link.destination)]${NAV_LINKS}, []),
+  "menuLinks": coalesce(menuLinks[defined(link.destination)]${MENU_LINKS}, []),
   "footerGroups": coalesce(footerGroups[]{"key": _key, "links": coalesce(links[defined(link.destination)]${NAV_LINKS}, [])}, [])
 }`
 
