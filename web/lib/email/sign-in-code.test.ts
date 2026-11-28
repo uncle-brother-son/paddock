@@ -3,7 +3,8 @@ import path from 'node:path'
 import { createElement } from 'react'
 import { render } from 'react-email'
 import { describe, expect, it } from 'vitest'
-import { EMAIL_COLOURS, SIGN_IN_EMAIL_WORDS, SIGN_IN_LINK, SIGN_IN_SUBJECT, SignInCodeEmail, SUPABASE_FIELDS } from './sign-in-code'
+import { existsSync, readFileSync } from 'node:fs'
+import { EMAIL_COLOURS, EMAIL_WORDMARK, SIGN_IN_EMAIL_WORDS, SIGN_IN_LINK, SIGN_IN_SUBJECT, SignInCodeEmail, SUPABASE_FIELDS } from './sign-in-code'
 
 // Brief W85a item 5: the sign-in email as Supabase is given it. One HTML for both of Supabase's templates (Magic Link
 // and Confirm signup). With SIGN_IN_EMAIL_OUT=<folder> set, the two files are written there for Wayne to paste into
@@ -36,19 +37,43 @@ describe('the sign-in email (W85a item 5)', () => {
     expect(SIGN_IN_EMAIL_WORDS.ignore).toBe('If you didn’t ask to sign in, you can ignore this email.')
   })
 
-  it('works in mail clients: inline styles only (no <style> block, no class), solid colours, the logo as a PNG with its size, no script', async () => {
+  it('works in mail clients: inline styles only (no <style> block, no class), solid colours, the wordmark as a PNG with its size, no script', async () => {
     const page = await html()
     expect(page).not.toMatch(/<style|<script|<link |class="|rgba\(|var\(--/)
-    expect(page).toContain('src="{{ .SiteURL }}/email/paddock-logo.png"')
-    expect(page).toMatch(/<img[^>]*width="106"[^>]*height="34"|<img[^>]*height="34"[^>]*width="106"/)
     for (const colour of Object.values(EMAIL_COLOURS)) expect(page).toContain(colour)
     expect(page).toContain('lang="en-GB"')
   })
 
-  it('the footer links go to the Terms and Privacy pages on the site', async () => {
+  // Level 3 (Wayne, 28 Nov): Figma's new Header (1932:39358) and Footer (1932:39368).
+  it('the header is the full wordmark alone, as a PNG on the site three times its drawn size', async () => {
+    const page = await html()
+    expect(page).toContain(`src="{{ .SiteURL }}${EMAIL_WORDMARK.path}"`)
+    expect(page).toMatch(/<img[^>]*width="284"[^>]*height="35"|<img[^>]*height="35"[^>]*width="284"/)
+    const file = path.join(__dirname, '../../public', EMAIL_WORDMARK.path)
+    expect(existsSync(file)).toBe(true)
+    // A PNG's width and height are bytes 16 to 24 of its header.
+    const header = readFileSync(file)
+    expect([header.readUInt32BE(16), header.readUInt32BE(20)]).toEqual([EMAIL_WORDMARK.width * 3, EMAIL_WORDMARK.height * 3])
+    // The older logo stays for the template Supabase holds until this one is pasted in.
+    expect(existsSync(path.join(__dirname, '../../public/email/paddock-logo.png'))).toBe(true)
+  })
+
+  it('no menu links and no "Your code" label: the only links are the wordmark (home) and Sign in; the footer is the copyright line', async () => {
     const page = asRead(await html())
-    expect(page).toContain('href="{{ .SiteURL }}/info/terms-and-conditions"')
-    expect(page).toContain('href="{{ .SiteURL }}/info/privacy-policy"')
+    expect([...page.matchAll(/<a [^>]*href="([^"]*)"/g)].map(([, href]) => href)).toEqual(['{{ .SiteURL }}', SIGN_IN_LINK])
+    expect(page).not.toMatch(/Your code|Account|>Book<|Terms|Privacy/)
+    const footer = page.slice(page.indexOf(SIGN_IN_EMAIL_WORDS.ignore))
+    expect(footer).toMatch(/font-size:10px[^>]*>©2026 The Paddock Wellness Club</)
+  })
+
+  it("Figma's gaps between the words: 32 between blocks, less where each line puts its capitals", async () => {
+    const page = await html()
+    // The heading's capitals 32 below the header (its line puts them 4 down), the intro 32 below the heading's baseline.
+    expect(page).toMatch(/padding:28px 16px 0[^>]*>[\s\S]*?<h1/)
+    expect(page).toMatch(/padding:24\.5px 16px 0[^>]*>[\s\S]*?Enter this code/)
+    // The code: 16 round it inside its card. The button: 12 above and below its words.
+    expect(page).toContain('padding:12px 16px 13px')
+    expect(page).toMatch(/padding:10px 32px 10\.5px/)
   })
 
   it('writes the two templates for Supabase when SIGN_IN_EMAIL_OUT is set', async () => {

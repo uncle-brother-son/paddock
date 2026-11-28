@@ -1,16 +1,21 @@
-// Brief W85a item 5 (backend log 9, 27): the sign-in email, from Figma 05 Emails "Sign-in code" (desktop 1322:3780,
-// the later of the two desktop frames, with the "Your code" label above the code box; mobile 1218:334). Supabase sends
-// it (through Resend, its custom SMTP) for two of its templates, Magic Link and Confirm signup, with its own Go
-// template fields left in the HTML for it to fill: {{ .Token }} (the 6-digit code), {{ .TokenHash }}, {{ .SiteURL }},
+// Brief W85a item 5 (backend log 9, 27), rebuilt at Level 3 (Wayne, 28 Nov) from Figma 05 Emails "Sign-in code" as he
+// updated it: desktop 1322:3780, mobile 1932:39373; Header 1932:39358 (the full "THE paddock WELLNESS CLUB" wordmark,
+// no links beside it) and Footer 1932:39368 (the copyright line only). No "Your code" label. Supabase sends it
+// (through Resend, its custom SMTP) for two of its templates, Magic Link and Confirm signup, with its own Go template
+// fields left in the HTML for it to fill: {{ .Token }} (the 6-digit code), {{ .TokenHash }}, {{ .SiteURL }},
 // {{ .RedirectTo }}. It is rendered once to HTML (sign-in-code.test.ts, SIGN_IN_EMAIL_OUT) and pasted into Supabase:
 // nothing renders it at run time.
 //
 // Email clients: inline styles only (no <style> block, so no media queries), tables for layout (react-email's
-// Container, Section, Row, Column), solid colours (Outlook has no rgba: Surface/Card and Text/Muted Primary are mixed
-// onto Surface/Primary here), the logo as a PNG on the site (no client shows an SVG reliably), and the brand fonts
-// named first with system fonts after them (they are web fonts: Apple Mail may show them, Gmail and Outlook show the
-// fallbacks).
-import { Body, Button, Column, Container, Head, Heading, Html, Img, Link, Preview, Row, Section, Text } from 'react-email'
+// Container, Section), solid colours (Outlook has no rgba: Surface/Card and Text/Muted Primary are mixed onto
+// Surface/Primary here), the wordmark as a PNG on the site (no client shows an SVG reliably), and the brand fonts named
+// first with system fonts after them (they are web fonts: Apple Mail may show them, Gmail and Outlook the fallbacks).
+//
+// Figma trims every text to its capitals and its baseline, and its gaps are between those (32px between blocks, 16px
+// inside the code's card, 12px inside the button). No email client trims text, so each block's padding is Figma's gap
+// less where its line puts the capitals and the baseline, measured with the site's fonts (`TRIM` below): what is seen
+// between the words is Figma's gap.
+import { Body, Button, Container, Head, Heading, Html, Img, Link, Preview, Section, Text } from 'react-email'
 import type { CSSProperties } from 'react'
 
 /** Supabase's own template fields, left as they are for Supabase to fill. */
@@ -32,14 +37,22 @@ export const SIGN_IN_LINK = `${SUPABASE_FIELDS.siteUrl}/auth/confirm?token_hash=
 /** The subject line for both templates (Figma draws none). The code itself stays out of the subject. */
 export const SIGN_IN_SUBJECT = 'Your sign-in code for The Paddock'
 
+/** Figma's words, in its order. */
 export const SIGN_IN_EMAIL_WORDS = {
   title: 'Your sign-in code',
   intro: 'Enter this code where you asked to sign in.',
-  codeLabel: 'Your code',
   orButton: 'Or sign in with this button.',
   button: 'Sign in',
   ignore: 'If you didn’t ask to sign in, you can ignore this email.',
+  copyright: '©2026 The Paddock Wellness Club',
 } as const
+
+/**
+ * The wordmark (Figma's Header: "THE paddock WELLNESS CLUB", drawn 283.6 by 34.4) on the site, as a PNG three times its
+ * size (852 by 105) for sharp screens, drawn at 284 by 35. Made from Figma's own asset. The older, shorter logo
+ * (`paddock-logo.png`) stays on the site for the template Supabase holds until this one is pasted in.
+ */
+export const EMAIL_WORDMARK = { path: '/email/paddock-wordmark.png', width: 284, height: 35 } as const
 
 /** Figma's variables, as solid colours. */
 export const EMAIL_COLOURS = {
@@ -60,15 +73,30 @@ export const EMAIL_COLOURS = {
 const SERIF = "'GT Sectra Fine', Georgia, 'Times New Roman', serif"
 const SANS = "'GT America', 'Helvetica Neue', Helvetica, Arial, sans-serif"
 
-/** Figma's text styles. */
-const h1: CSSProperties = { fontFamily: SERIF, fontWeight: 400, fontSize: '24px', lineHeight: '28px', letterSpacing: '0.6px', color: EMAIL_COLOURS.text, margin: 0 }
-const copy14: CSSProperties = { fontFamily: SANS, fontWeight: 400, fontSize: '14px', lineHeight: '20px', color: EMAIL_COLOURS.text, margin: 0 }
-const copy12: CSSProperties = { fontFamily: SANS, fontWeight: 400, fontSize: '12px', lineHeight: '17px', color: EMAIL_COLOURS.text, margin: 0 }
-const label12: CSSProperties = { fontFamily: SANS, fontWeight: 500, fontSize: '12px', lineHeight: '14px', letterSpacing: '0.3px', textTransform: 'uppercase', color: EMAIL_COLOURS.text, margin: 0, textDecoration: 'none' }
-const label10: CSSProperties = { fontFamily: SANS, fontWeight: 500, fontSize: '10px', lineHeight: '12px', letterSpacing: '0.3px', textTransform: 'uppercase', color: EMAIL_COLOURS.muted, textDecoration: 'none' }
+/**
+ * Figma's text styles, each with a line height (H1 and Label 100%, Copy 1.4 as Figma's) and where that line puts the
+ * capitals: `top` from the line's top to the cap top, `bottom` from the baseline to the line's bottom, in px, measured
+ * with GT Sectra Fine and GT America (rounded to the half pixel).
+ */
+const TRIM = {
+  h1: { top: 4, bottom: 3 },
+  copy12: { top: 4.5, bottom: 4 },
+  label12: { top: 2, bottom: 1.5 },
+  label10: { top: 1.5, bottom: 1.5 },
+} as const
 
-/** Spacing: the grid margin is 16px each side; blocks are 32px apart. */
-const block: CSSProperties = { padding: '0 16px 32px' }
+const h1: CSSProperties = { fontFamily: SERIF, fontWeight: 400, fontSize: '24px', lineHeight: '24px', letterSpacing: '0.6px', color: EMAIL_COLOURS.text, margin: 0 }
+const copy12: CSSProperties = { fontFamily: SANS, fontWeight: 400, fontSize: '12px', lineHeight: '17px', color: EMAIL_COLOURS.text, margin: 0 }
+const label12: CSSProperties = { fontFamily: SANS, fontWeight: 500, fontSize: '12px', lineHeight: '12px', letterSpacing: '0.3px', textTransform: 'uppercase', margin: 0, textDecoration: 'none' }
+const label10: CSSProperties = { fontFamily: SANS, fontWeight: 500, fontSize: '10px', lineHeight: '10px', letterSpacing: '0.3px', textTransform: 'uppercase', color: EMAIL_COLOURS.muted, margin: 0 }
+
+/** Figma's gaps: 32 between blocks and round the content, the grid margin 16 at each side. */
+const GAP = 32
+const MARGIN = 16
+const px = (value: number): string => `${value}px`
+
+/** A block of the content with the space above it that Figma's gap leaves once the line's own space is taken off. */
+const gapAbove = (above: number): CSSProperties => ({ padding: `${px(above)} ${px(MARGIN)} 0` })
 
 export function SignInCodeEmail() {
   const site = SUPABASE_FIELDS.siteUrl
@@ -78,69 +106,48 @@ export function SignInCodeEmail() {
       <Preview>{SIGN_IN_EMAIL_WORDS.intro}</Preview>
       <Body style={{ backgroundColor: EMAIL_COLOURS.surface, margin: 0, padding: 0 }}>
         <Container style={{ maxWidth: '600px', width: '100%', backgroundColor: EMAIL_COLOURS.surface }}>
-          {/* Header: the logo, Account and Book. Figma's header is 89px: 32px above and below a 25px box the 34px logo
-              overflows, so 28 + 34 + 27 here. */}
-          <Section style={{ padding: '28px 16px 27px' }}>
-            <Row>
-              <Column style={{ verticalAlign: 'middle' }}>
-                <Link href={site}>
-                  <Img src={`${site}/email/paddock-logo.png`} width="106" height="34" alt="The Paddock" style={{ display: 'block', border: 0 }} />
-                </Link>
-              </Column>
-              <Column align="right" style={{ verticalAlign: 'middle' }}>
-                <Link href={`${site}/account`} style={{ ...label12, padding: '8px' }}>
-                  Account
-                </Link>
-                <Link href={`${site}/book`} style={{ ...label12, padding: '8px', marginLeft: '8px' }}>
-                  Book
-                </Link>
-              </Column>
-            </Row>
+          {/* Header (1932:39358): the wordmark alone. Figma's header is 89px: 32 above and below a 25px box the 34.4px
+              wordmark overflows evenly, so 27 + 35 + 27 here. */}
+          <Section style={{ padding: `27px ${px(MARGIN)}` }}>
+            <Link href={site}>
+              <Img src={`${site}${EMAIL_WORDMARK.path}`} width={String(EMAIL_WORDMARK.width)} height={String(EMAIL_WORDMARK.height)} alt="The Paddock Wellness Club" style={{ display: 'block', border: 0 }} />
+            </Link>
           </Section>
 
-          {/* The content. */}
-          <Section style={{ paddingTop: '32px' }}>
-            <Section style={block}>
-              <Heading as="h1" style={h1}>
-                {SIGN_IN_EMAIL_WORDS.title}
-              </Heading>
-            </Section>
-            <Section style={block}>
-              <Text style={copy14}>{SIGN_IN_EMAIL_WORDS.intro}</Text>
-            </Section>
-            <Section style={block}>
-              <Text style={{ ...label12, paddingBottom: '16px' }}>{SIGN_IN_EMAIL_WORDS.codeLabel}</Text>
-              <Section style={{ backgroundColor: EMAIL_COLOURS.card, borderRadius: '4px' }}>
-                <Text style={{ ...h1, padding: '16px', letterSpacing: '0.6px' }}>{SUPABASE_FIELDS.token}</Text>
-              </Section>
-            </Section>
-            <Section style={block}>
-              <Text style={copy14}>{SIGN_IN_EMAIL_WORDS.orButton}</Text>
-            </Section>
-            <Section style={block}>
-              <Button href={SIGN_IN_LINK} style={{ ...label12, color: EMAIL_COLOURS.buttonText, backgroundColor: EMAIL_COLOURS.button, borderRadius: '4px', padding: '12px 32px', display: 'inline-block' }}>
-                {SIGN_IN_EMAIL_WORDS.button}
-              </Button>
-            </Section>
-            <Section style={block}>
-              <Text style={copy12}>{SIGN_IN_EMAIL_WORDS.ignore}</Text>
+          {/* The content (32 round it and between its blocks). */}
+          <Section style={gapAbove(GAP - TRIM.h1.top)}>
+            <Heading as="h1" style={h1}>
+              {SIGN_IN_EMAIL_WORDS.title}
+            </Heading>
+          </Section>
+          <Section style={gapAbove(GAP - TRIM.h1.bottom - TRIM.copy12.top)}>
+            <Text style={copy12}>{SIGN_IN_EMAIL_WORDS.intro}</Text>
+          </Section>
+          {/* The code in H1's size on Surface/Card, 16 round it, 4px corners. */}
+          <Section style={gapAbove(GAP - TRIM.copy12.bottom)}>
+            <Section style={{ backgroundColor: EMAIL_COLOURS.card, borderRadius: '4px' }}>
+              <Text style={{ ...h1, padding: `${px(16 - TRIM.h1.top)} 16px ${px(16 - TRIM.h1.bottom)}` }}>{SUPABASE_FIELDS.token}</Text>
             </Section>
           </Section>
+          <Section style={gapAbove(GAP - TRIM.copy12.top)}>
+            <Text style={copy12}>{SIGN_IN_EMAIL_WORDS.orButton}</Text>
+          </Section>
+          {/* Button Type=primary: 32 each side, 12 above and below its words, 4px corners. */}
+          <Section style={gapAbove(GAP - TRIM.copy12.bottom)}>
+            <Button
+              href={SIGN_IN_LINK}
+              style={{ ...label12, color: EMAIL_COLOURS.buttonText, backgroundColor: EMAIL_COLOURS.button, borderRadius: '4px', padding: `${px(12 - TRIM.label12.top)} 32px ${px(12 - TRIM.label12.bottom)}`, display: 'inline-block' }}
+            >
+              {SIGN_IN_EMAIL_WORDS.button}
+            </Button>
+          </Section>
+          <Section style={{ ...gapAbove(GAP - TRIM.copy12.top), paddingBottom: px(GAP - TRIM.copy12.bottom) }}>
+            <Text style={copy12}>{SIGN_IN_EMAIL_WORDS.ignore}</Text>
+          </Section>
 
-          {/* Footer: Terms & Conditions, Privacy Policy, the copyright line. On a phone the line wraps under the links
-              (as Figma's mobile frame); on a wider screen it follows them on the same line. */}
-          <Section style={{ padding: '0 16px 32px' }}>
-            <Text style={{ margin: 0 }}>
-              <span style={{ display: 'inline-block', paddingRight: '16px', paddingBottom: '16px' }}>
-                <Link href={`${site}/info/terms-and-conditions`} style={label10}>
-                  Terms &amp; Conditions
-                </Link>
-                <Link href={`${site}/info/privacy-policy`} style={{ ...label10, marginLeft: '16px' }}>
-                  Privacy Policy
-                </Link>
-              </span>
-              <span style={{ ...label10, display: 'inline-block' }}>©2026 The Paddock Wellness Club</span>
-            </Text>
+          {/* Footer (1932:39368): the copyright line alone, in Label 10, Text/Muted Primary, 32 above and below. */}
+          <Section style={{ padding: `${px(GAP - TRIM.label10.top)} ${px(MARGIN)} ${px(GAP - TRIM.label10.bottom)}` }}>
+            <Text style={label10}>{SIGN_IN_EMAIL_WORDS.copyright}</Text>
           </Section>
         </Container>
       </Body>
