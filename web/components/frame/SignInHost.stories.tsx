@@ -9,6 +9,7 @@ import { SIGN_IN_COPY as COPY } from '@/lib/sign-in/words'
 
 import { FrameShell } from './FrameShell'
 import { SAMPLE_FRAME, SamplePage } from './sample-content'
+import { useFramePanels } from './useFramePanels'
 
 // Brief W85: the sign-in popup over a page, as the frame draws it (components/frame/SignInHost.tsx), opened by the
 // one signIn() seam, as an Event page's "Sign in" and the booking panel's "Log in" open it. Storybook has no Supabase
@@ -16,11 +17,22 @@ import { SAMPLE_FRAME, SamplePage } from './sample-content'
 // Storybook's link stand-in can't show: a press there arrives already handled. It is checked on the running site.)
 
 function PageWithSignIn() {
+  const panels = useFramePanels()
   return (
     <>
-      <div data-theme="light" className="px-16 pt-160">
+      <div data-theme="light" className="flex flex-col gap-16 px-16 pt-160">
         <BigButton className="max-w-[320px]" onClick={() => signIn()}>
           Sign in
+        </BigButton>
+        {/* As the booking panel's Log in: the panel opens, then sign-in over it (the panel's own steps need its reads). */}
+        <BigButton
+          className="max-w-[320px]"
+          onClick={() => {
+            panels.open('book')
+            window.setTimeout(() => signIn(), DURATION_SHORT * 1000 + 100)
+          }}
+        >
+          Book, then Log in
         </BigButton>
       </div>
       <SamplePage />
@@ -59,7 +71,24 @@ async function open(canvasElement: HTMLElement, press: () => Promise<void>) {
   await waitFor(() => expect(popup).toBeVisible())
   // In its place: no translate left (Chromium reports none, or 0px).
   await waitFor(() => expect(['none', '0px', '0px 0px']).toContain(getComputedStyle(popup).translate), { timeout: 3000 })
+  await expectOnTop(popup)
   return popup
+}
+
+/**
+ * The popup is what is seen and pressed at its middle: nothing (its own shade, the booking panel) is drawn over it.
+ * Live bug, 28 Nov: the shade painted over the popup inside the sign-in layer, and every check above still passed.
+ */
+async function expectOnTop(popup: HTMLElement) {
+  const document = popup.ownerDocument
+  const placed = box(popup)
+  // elementFromPoint looks through anything with pointer-events: none, as the sign-in layer's shade is (it takes that
+  // from its layer): so for the moment of looking every shade takes part, and what is found is what is painted on top.
+  const shades = [...document.querySelectorAll<HTMLElement>('[data-overlay]')]
+  for (const shade of shades) shade.style.pointerEvents = 'auto'
+  const atMiddle = document.elementFromPoint(placed.left + placed.width / 2, placed.top + placed.height / 2)
+  for (const shade of shades) shade.style.pointerEvents = ''
+  await expect(atMiddle !== null && popup.contains(atMiddle)).toBe(true)
 }
 
 /**
@@ -128,5 +157,33 @@ export const NotAnEmail: Story = {
     await userEvent.keyboard('{Enter}')
     await expect(await canvas.findByText(COPY.invalidEmail)).toBeVisible()
     await expect(canvas.getByRole('textbox', { name: COPY.email })).toHaveAttribute('aria-invalid', 'true')
+  },
+}
+
+/**
+ * Over the booking panel (its AccountBar's Log in): the popup is on top of the panel and of its own shade, the panel is
+ * out of reach while it is open, and Esc closes only the popup: the panel is still there, as it was.
+ */
+export const OverTheBookingPanel: Story = {
+  name: 'Over the booking panel',
+  globals: { viewport: { value: 'desktop', isRotated: false } },
+  play: async ({ canvas, canvasElement }) => {
+    const panel = canvasElement.ownerDocument.querySelector('[data-book="panel"]') as HTMLElement
+    const popup = await open(canvasElement, () => userEvent.click(canvas.getByRole('button', { name: 'Book, then Log in' })))
+    await expect(panel).toBeVisible()
+    await expect(panel.inert).toBe(true)
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(popup).not.toBeVisible(), { timeout: 3000 })
+    await expect(panel).toBeVisible()
+    await expect(panel.inert).toBe(false)
+  },
+}
+
+/** On a phone, over the booking panel: on top too. */
+export const OverTheBookingPanelOnAPhone: Story = {
+  name: 'Over the booking panel, on a phone',
+  globals: { viewport: { value: 'mobile', isRotated: false } },
+  play: async ({ canvas, canvasElement }) => {
+    await open(canvasElement, () => userEvent.click(canvas.getByRole('button', { name: 'Book, then Log in' })))
   },
 }

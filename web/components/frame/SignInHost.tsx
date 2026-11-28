@@ -321,11 +321,13 @@ function SignInPopup({ opening, onDone, check, status, legalPages }: SignInPopup
     <div data-frame-popup="" className="pointer-events-none fixed inset-0 z-30">
       {/* The shade is drawn here; a press on it lands on the layer above it, which closes the popup as the shade would. */}
       <Overlay open={open} />
+      {/* Above the shade (z-20), as every popup is (z-30): with no z-index of its own the shade, a positioned layer,
+          painted over the popup (live bug, 28 Nov). */}
       <div
         data-lenis-prevent=""
         data-sign-in="layer"
         data-account={status}
-        className={`absolute inset-0 flex flex-col overflow-y-auto ${open ? 'pointer-events-auto' : ''}`}
+        className={`absolute inset-0 z-30 flex flex-col overflow-y-auto ${open ? 'pointer-events-auto' : ''}`}
         onClick={(event) => event.target === event.currentTarget && giveUp()}
       >
         <div
