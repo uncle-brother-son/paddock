@@ -178,11 +178,13 @@ function CodeStep({ email, code, onCode, wrong = false, resent = false, codeErro
       <Checkbox checked={keepSignedIn} onChange={onKeepSignedIn}>
         {COPY.keepSignedIn}
       </Checkbox>
-      <div className="flex flex-wrap items-start gap-8 text-copy-12">
+      <div data-sign-in="sent-row" className="flex flex-wrap items-start gap-8 text-copy-12">
         <p className="text-copy-12 text-text-primary">{COPY.sentTo(email.trim())}</p>
         <LinkButton onClick={onChangeEmail}>{COPY.change}</LinkButton>
-        {/* "Code sent" stands where Resend code was for 6 seconds, as Figma's code resent; it can't be pressed meanwhile. */}
-        <span aria-live="polite">
+        {/* "Code sent" stands where Resend code was for 6 seconds, as Figma's code resent; it can't be pressed meanwhile.
+            The live region is a flex box (Level 3, 28 Nov): as plain inline text it had a line of its own round what it
+            holds, which sat Resend code lower than the other two; now it is trimmed to its capitals as they are. */}
+        <span aria-live="polite" className="flex">
           {resent ? <span className="text-link-12 text-text-muted-primary">{COPY.resent}</span> : <LinkButton onClick={onResend} disabled={busy}>{COPY.resend}</LinkButton>}
         </span>
       </div>

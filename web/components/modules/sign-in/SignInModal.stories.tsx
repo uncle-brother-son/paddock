@@ -96,6 +96,23 @@ const MOBILE = { viewport: { value: 'mobile', isRotated: false } }
 
 const box = (element: Element) => element.getBoundingClientRect()
 
+/**
+ * "Sent to …", Change and Resend code (or Code sent) on one line, as Figma's code step (1174:12698): each is trimmed to
+ * its capitals and its baseline, so on one line their tops and bottoms are the same (Level 3, 28 Nov: Resend code sat
+ * lower, inside a live region drawn as inline text).
+ */
+async function expectSentRowOnOneLine(canvasElement: HTMLElement) {
+  await document.fonts.ready
+  const row = canvasElement.querySelector('[data-sign-in="sent-row"]') as HTMLElement
+  const [sent, change, live] = [...row.children] as HTMLElement[]
+  const words = [sent!, change!, live!.firstElementChild as HTMLElement]
+  await expect(words.map((word) => word.textContent)).toHaveLength(3)
+  const tops = words.map((word) => Math.round(box(word).top * 2) / 2)
+  const bottoms = words.map((word) => Math.round(box(word).bottom * 2) / 2)
+  await expect(tops).toEqual([tops[0], tops[0], tops[0]])
+  await expect(bottoms).toEqual([bottoms[0], bottoms[0], bottoms[0]])
+}
+
 /** Step=email (1174:12629): the heading, Close, the email field with its arrow, and the terms in Copy 12. */
 export const Email: Story = {
   name: 'Step=email',
@@ -135,11 +152,12 @@ export const Code: Story = {
   name: 'Step=code',
   globals: DESKTOP,
   args: { step: 'code', email: BOB },
-  play: async ({ canvas, args }) => {
+  play: async ({ canvas, canvasElement, args }) => {
     await expect(canvas.getByRole('heading', { name: COPY.codeTitle })).toBeVisible()
     await expect(canvas.getByRole('group', { name: COPY.code })).toBeVisible()
     await expect(canvas.getByRole('checkbox', { name: COPY.keepSignedIn })).toBeChecked()
     await expect(canvas.getByText(`Sent to ${BOB}`)).toBeVisible()
+    await expectSentRowOnOneLine(canvasElement)
     // A whole code pasted fills the six boxes (the phone's one-time-code autofill arrives the same way).
     const first = canvas.getByRole('textbox', { name: 'Digit 1 of 6' })
     await userEvent.click(first)
@@ -161,9 +179,10 @@ export const CodeResent: Story = {
   name: 'Step=code resent',
   globals: DESKTOP,
   args: { step: 'code', email: BOB, resent: true },
-  play: async ({ canvas }) => {
+  play: async ({ canvas, canvasElement }) => {
     await expect(canvas.getByText(COPY.resent)).toBeVisible()
     await expect(canvas.queryByRole('button', { name: COPY.resend })).toBeNull()
+    await expectSentRowOnOneLine(canvasElement)
   },
 }
 
